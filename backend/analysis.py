@@ -83,6 +83,49 @@ def volume_signal(df: pd.DataFrame) -> Signal:
             "text": "成交量与近期均量相当。"}
 
 
+def _tf_trend(close: pd.Series, short_w: int, long_w: int) -> tuple[str, str]:
+    """单一周期趋势：综合「价 vs 长均线」「短均线 vs 长均线」「长均线斜率」。"""
+    close = close.dropna()
+    if len(close) < short_w + 1:
+        return ("数据不足", "neutral")
+    ms = close.rolling(short_w, min_periods=1).mean()
+    ml = close.rolling(long_w, min_periods=1).mean()
+    c, s, l = close.iloc[-1], ms.iloc[-1], ml.iloc[-1]
+    back = min(len(ml) - 1, 4)
+    slope = ml.iloc[-1] - ml.iloc[-1 - back]  # 长均线近端斜率
+    if c > l and s >= l and slope >= 0:
+        return ("上行", "bullish")
+    if c < l and s <= l and slope <= 0:
+        return ("下行", "bearish")
+    return ("震荡", "neutral")
+
+
+def trend_overview(df: pd.DataFrame) -> dict:
+    """多周期趋势：用日线重采样出周/月线，看大方向是否共振。"""
+    d = df[["date", "close"]].copy()
+    d["dt"] = pd.to_datetime(d["date"])
+    close = d.set_index("dt")["close"]
+    weekly = close.resample("W").last().dropna()
+    monthly = close.resample("ME").last().dropna()
+
+    tfs = {
+        "daily": ("日线", *_tf_trend(close, 20, 60)),
+        "weekly": ("周线", *_tf_trend(weekly, 5, 20)),
+        "monthly": ("月线", *_tf_trend(monthly, 3, 12)),
+    }
+    items = {k: {"name": v[0], "label": v[1], "tone": v[2]} for k, v in tfs.items()}
+    tones = [v[2] for v in tfs.values() if v[1] != "数据不足"]
+    if tones and all(t == "bullish" for t in tones):
+        align = {"label": "多周期共振向上", "tone": "bullish"}
+    elif tones and all(t == "bearish" for t in tones):
+        align = {"label": "多周期共振向下", "tone": "bearish"}
+    elif "bullish" in tones and "bearish" in tones:
+        align = {"label": "周期方向背离（大小级别不一致）", "tone": "warning"}
+    else:
+        align = {"label": "方向不明 / 震荡", "tone": "neutral"}
+    return {"items": items, "align": align}
+
+
 def build_analysis(df: pd.DataFrame) -> dict:
     signals = [
         trend_signal(df), macd_signal(df), rsi_signal(df),

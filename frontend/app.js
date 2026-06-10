@@ -117,8 +117,21 @@ const _stockMem = new Map();  // 会话内股票详情缓存（含 K 线，太�
 function renderStock(d) {
   renderHeader(d);
   renderVerdict(d.analysis);
+  renderTrends(d.trends);
   renderCharts(d);
   renderSignals(d.analysis);
+}
+
+function renderTrends(t) {
+  const box = $("trends");
+  if (!t || !t.items) { box.hidden = true; return; }
+  box.hidden = false;
+  const cells = Object.values(t.items)
+    .map((it) => `<span class="tf ${it.tone}"><b>${it.name}</b>${it.label}</span>`)
+    .join("");
+  box.innerHTML =
+    `<span class="trends-title">多周期趋势</span>${cells}` +
+    `<span class="tf-align ${t.align.tone}">${t.align.label}</span>`;
 }
 
 async function selectStock(code) {
@@ -399,16 +412,20 @@ function renderFundamentals(d) {
   const el = $("fundamentals");
   {
     const v = d.valuation || {};
+    const pctText = (p) => p == null ? "" : `近5年 ${p}% 分位`;
+    const pctCls = (p) => p == null ? "" : (p <= 30 ? "cheap" : (p >= 70 ? "rich" : "mid"));
     const metrics = [];
-    if (v.pe_ttm != null) metrics.push(["市盈率 PE(TTM)", v.pe_ttm]);
-    if (v.pb != null) metrics.push(["市净率 PB", v.pb]);
+    if (v.pe_ttm != null) metrics.push(["市盈率 PE(TTM)", v.pe_ttm, pctText(v.pe_ttm_pct), pctCls(v.pe_ttm_pct)]);
+    if (v.pb != null) metrics.push(["市净率 PB", v.pb, pctText(v.pb_pct), pctCls(v.pb_pct)]);
     if (d.fund_flow && d.fund_flow.main_net != null)
-      metrics.push(["主力净流入(万)", d.fund_flow.main_net]);
+      metrics.push(["主力净流入(万)", d.fund_flow.main_net, "", ""]);
 
     let html = "";
     if (metrics.length) {
       html += '<div class="funda-metrics">' +
-        metrics.map(([l, val]) => `<div class="funda-metric"><div class="v">${val}</div><div class="l">${l}</div></div>`).join("") +
+        metrics.map(([l, val, sub, cls]) =>
+          `<div class="funda-metric"><div class="v">${val}</div><div class="l">${l}</div>` +
+          (sub ? `<div class="pctile ${cls}">${sub}</div>` : "") + "</div>").join("") +
         "</div>";
     }
     const fin = d.financials || [];

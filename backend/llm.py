@@ -231,8 +231,37 @@ def build_chat_messages(question: str, contexts: list[dict]) -> list[dict]:
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def build_messages(stock: dict) -> list[dict]:
-    """把行情/指标/规则信号打包成给 LLM 的中文提示。"""
+def _trends_text(stock: dict) -> str:
+    t = stock.get("trends") or {}
+    items = t.get("items") or {}
+    if not items:
+        return ""
+    parts = "；".join(f"{v['name']}{v['label']}" for v in items.values())
+    align = (t.get("align") or {}).get("label", "")
+    return f"多周期趋势：{parts}（{align}）"
+
+
+def _valuation_text(funda: dict | None) -> str:
+    if not funda:
+        return ""
+    v = funda.get("valuation") or {}
+    bits = []
+    for key, name in (("pe_ttm", "PE(TTM)"), ("pb", "PB")):
+        if v.get(key) is not None:
+            pct = v.get(key + "_pct")
+            if pct is not None:
+                level = "偏低/便宜" if pct <= 30 else ("偏高/偏贵" if pct >= 70 else "中等")
+                bits.append(f"{name} {v[key]}（近五年 {pct}% 分位，{level}）")
+            else:
+                bits.append(f"{name} {v[key]}")
+    ff = funda.get("fund_flow") or {}
+    if ff.get("main_net") is not None:
+        bits.append(f"主力净流入 {ff['main_net']} 万（{ff.get('date','')}）")
+    return "估值/资金：" + "；".join(bits) if bits else ""
+
+
+def build_messages(stock: dict, funda: dict | None = None) -> list[dict]:
+    """把行情/指标/多周期趋势/估值分位打包成给 LLM 的中文提示（含投资大师透镜 + 情景化前瞻）。"""
     q = stock["quote"]
     a = stock["analysis"]
     k = stock["kline"]
@@ -245,18 +274,26 @@ def build_messages(stock: dict) -> list[dict]:
         "布林上轨": k["boll_upper"][-1], "布林下轨": k["boll_lower"][-1],
     }
     system = (
-        "你是一名严谨、客观的 A 股投研助手。你的任务是基于给定的技术指标数据，"
-        "用通俗易懂的中文为新手做解读。要求：1) 先给一句话总体判断；"
-        "2) 分『趋势/动量/量价/风险』几个角度说明，明确指出指标之间的矛盾；"
-        "3) 给出需要关注的关键价位或信号；4) 最后必须提示风险，强调这不是投资建议、"
-        "技术指标有滞后性、应先用模拟盘或小资金验证。不要编造数据，只基于提供的数字。"
+        "你是一名严谨、客观的 A 股投研助手，面向新手用通俗中文解读。"
+        "请只基于下方提供的数据，不要编造数字；技术指标有滞后性、数据为日线级别非实时。\n"
+        "输出结构：\n"
+        "1) 一句话总体判断；\n"
+        "2) 『趋势(含多周期是否共振) / 动量 / 量价 / 估值 / 风险』分点说明，明确指出指标间的矛盾；\n"
+        "3) 投资大师透镜：分别用【价值派(格雷厄姆/巴菲特：安全边际、估值分位、是否便宜)】、"
+        "【成长派(彼得林奇：成长与估值是否匹配、PEG 思路)】、【趋势派(顺势：多周期方向是否一致)】"
+        "三个视角各给 1-2 句看法（数据不足就直说不足，不要硬编）；\n"
+        "4) 情景化前瞻：分『偏多情景』与『偏空情景』，各自说明【需要满足什么条件/关键价位】才成立，"
+        "而不是断言一定涨跌；\n"
+        "5) 风险提示：强调这不是投资建议、指标滞后、应先用模拟盘或小资金验证。\n"
         "不要给出『一定涨/一定跌』『满仓/梭哈』之类的话。"
     )
+    extra = "\n".join(x for x in (_trends_text(stock), _valuation_text(funda)) if x)
     user = (
         f"股票：{stock['name']}（{stock['code']}）\n"
-        f"最新数据：{json.dumps(latest, ensure_ascii=False)}\n\n"
+        f"最新数据：{json.dumps(latest, ensure_ascii=False)}\n"
+        f"{extra}\n\n"
         f"规则引擎给出的综合判断：{a['verdict']}\n"
         f"各维度信号：\n{signals_text}\n\n"
-        "请基于以上数据，给出一段结构化的中文深度点评。"
+        "请基于以上数据，按上述结构给出中文深度点评与情景化前瞻。"
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]

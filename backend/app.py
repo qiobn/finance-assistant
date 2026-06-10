@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import data, db, llm, storage
-from .analysis import build_analysis
+from .analysis import build_analysis, trend_overview
 from .indicators import compute_all
 
 app = FastAPI(title="A股 AI 辅助看板", version="0.1.0")
@@ -71,6 +71,7 @@ def _build_stock_payload(code: str, days: int, adjust: str) -> dict:
         raise HTTPException(status_code=404, detail="未取到该股票数据")
     df = compute_all(df)
     analysis = build_analysis(df)
+    trends = trend_overview(df)
 
     last = df.iloc[-1]
     prev_close = float(df.iloc[-2]["close"]) if len(df) > 1 else float(last["close"])
@@ -108,6 +109,7 @@ def _build_stock_payload(code: str, days: int, adjust: str) -> dict:
             "rsi12": _series(df, "rsi12"),
         },
         "analysis": analysis,
+        "trends": trends,
     }
 
 
@@ -362,8 +364,9 @@ def llm_set_active(payload: dict = Body(...)) -> dict:
 @app.post("/api/stock/{code}/ai")
 def stock_ai(code: str, days: int = Query(160, ge=30, le=500), adjust: str = "qfq") -> dict:
     payload = _build_stock_payload(code, days, adjust)
+    funda = data.get_fundamentals(code)
     try:
-        text = llm.chat(llm.build_messages(payload))
+        text = llm.chat(llm.build_messages(payload, funda))
     except llm.LLMError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"code": payload["code"], "name": payload["name"], "model": llm.get_config()["model"], "text": text}
@@ -372,10 +375,11 @@ def stock_ai(code: str, days: int = Query(160, ge=30, le=500), adjust: str = "qf
 @app.post("/api/stock/{code}/ai/stream")
 def stock_ai_stream(code: str, days: int = Query(160, ge=30, le=500), adjust: str = "qfq"):
     payload = _build_stock_payload(code, days, adjust)
+    funda = data.get_fundamentals(code)
 
     def gen():
         try:
-            for piece in llm.chat_stream(llm.build_messages(payload)):
+            for piece in llm.chat_stream(llm.build_messages(payload, funda)):
                 yield piece
         except llm.LLMError as exc:
             yield f"\n[错误] {exc}"

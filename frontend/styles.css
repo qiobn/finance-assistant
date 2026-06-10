@@ -279,6 +279,25 @@ body {
 .cfg-status { font-size: 12px; color: var(--text-dim); margin-right: auto; }
 .cfg-status.ok { color: var(--bull); }
 .cfg-status.err { color: var(--bear); }
+/* 多周期趋势 */
+.trends { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 14px; background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 12px; }
+.trends-title { font-size: 12px; color: var(--text-dim); margin-right: 2px; }
+.trends .tf { font-size: 13px; padding: 3px 10px; border-radius: 6px; background: var(--bg-elev); border: 1px solid var(--border); }
+.trends .tf b { margin-right: 5px; color: var(--text-dim); font-weight: 600; }
+.trends .tf.bullish { color: var(--bear); border-color: rgba(248,81,73,.4); }
+.trends .tf.bearish { color: var(--bull); border-color: rgba(46,160,67,.4); }
+.trends .tf.neutral { color: var(--text-dim); }
+.trends .tf-align { margin-left: auto; font-size: 12px; padding: 3px 10px; border-radius: 6px; }
+.trends .tf-align.bullish { color: var(--bear); background: rgba(248,81,73,.12); }
+.trends .tf-align.bearish { color: var(--bull); background: rgba(46,160,67,.12); }
+.trends .tf-align.warning { color: var(--warn); background: rgba(210,153,34,.12); }
+.trends .tf-align.neutral { color: var(--text-dim); background: var(--bg-elev); }
+/* 估值分位 */
+.pctile { font-size: 11px; margin-top: 3px; }
+.pctile.cheap { color: var(--bull); }
+.pctile.rich { color: var(--bear); }
+.pctile.mid { color: var(--text-dim); }
+
 /* 骨架屏（加载占位） */
 @keyframes skel-shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
 .skel {

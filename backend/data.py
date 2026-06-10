@@ -331,12 +331,19 @@ def get_fundamentals(code: str) -> dict:
     if not AKSHARE_AVAILABLE:
         return out
 
-    # 估值：百度源（稳定，PE/PB 为无量纲比值）
+    # 估值：百度源（PE/PB），取近五年序列 → 当前值 + 历史分位（越低越便宜）
     for key, ind in (("pe_ttm", "市盈率(TTM)"), ("pb", "市净率")):
         try:
-            df = _ak(ak.stock_zh_valuation_baidu, symbol=code, indicator=ind, period="近一年")
+            df = _ak(ak.stock_zh_valuation_baidu, symbol=code, indicator=ind, period="近五年")
             if df is not None and not df.empty:
-                out["valuation"][key] = round(float(df.iloc[-1]["value"]), 2)
+                vals = pd.to_numeric(df["value"], errors="coerce").dropna()
+                vals = vals[vals > 0]  # 估值为负（亏损）不纳入分位
+                if not vals.empty:
+                    cur = float(vals.iloc[-1])
+                    out["valuation"][key] = round(cur, 2)
+                    pct = float((vals <= cur).sum()) / len(vals) * 100
+                    out["valuation"][key + "_pct"] = round(pct, 1)
+                    out["valuation"][key + "_n"] = len(vals)
         except Exception:
             out["valuation"][key] = None
 
