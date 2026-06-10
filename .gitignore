@@ -1,0 +1,27 @@
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 前端依赖（本项目无需，但以防万一）
+node_modules/
+
+# 本地数据与缓存（含 API key、自选股、SQLite 缓存）——切勿入库
+data/
+
+# 密钥 / 环境变量（保留 .env.example 作为模板）
+.env
+.env.*
+!.env.example
+
+# 杂项
+*.log
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,643 @@
+"use strict";
+
+const RED = "#f85149";   // A股：涨/多
+const GREEN = "#2ea043"; // A股：跌/空
+const $ = (id) => document.getElementById(id);
+
+let chart = null;
+let currentCode = null;
+let watchSet = new Set();
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+  return res.json();
+}
+
+function showLoading(on) { $("loading").hidden = !on; }
+
+/* 客户端缓存 + stale-while-revalidate：先用本地旧数据立即渲染，再请求新数据回填 */
+function cacheGet(key) {
+  try { return JSON.parse(localStorage.getItem("swr:" + key) || "null"); } catch { return null; }
+}
+function cacheSet(key, data) {
+  try { localStorage.setItem("swr:" + key, JSON.stringify(data)); } catch {}
+}
+async function swr(key, url, onData) {
+  const cached = cacheGet(key);
+  if (cached) onData(cached, true);       // 立即渲染旧数据
+  const fresh = await api(url);            // 后台取新数据
+  cacheSet(key, fresh);
+  onData(fresh, false);                    // 回填
+  return fresh;
+}
+
+function skeleton(n, cls) {
+  return Array.from({ length: n }, () => `<div class="skel ${cls || ""}"></div>`).join("");
+}
+
+/* ---------------- Health ---------------- */
+async function loadHealth() {
+  try {
+    const h = await api("/api/health");
+    $("health-dot").className = "dot ok";
+    $("health-text").textContent = h.akshare ? "akshare 已就绪" : "akshare 不可用（演示模式）";
+    $("data-badge").textContent = h.akshare ? "" : "演示";
+  } catch {
+    $("health-dot").className = "dot bad";
+    $("health-text").textContent = "后端未连接";
+  }
+}
+
+/* ---------------- Watchlist ---------------- */
+async function loadWatchlist() {
+  const { items } = await api("/api/watchlist");
+  watchSet = new Set(items.map((i) => i.code));
+  renderWatchlist(items);
+  if (!currentCode && items.length) selectStock(items[0].code);
+  updateAddBtn();
+}
+
+function renderWatchlist(items) {
+  const ul = $("watchlist");
+  ul.innerHTML = "";
+  items.forEach((it) => {
+    const li = document.createElement("li");
+    li.dataset.code = it.code;
+    if (it.code === currentCode) li.classList.add("active");
+    li.innerHTML = `<span class="wl-name">${it.name}</span><span class="wl-code">${it.code}</span><span class="wl-del" title="移除">×</span>`;
+    li.querySelector(".wl-name").onclick = () => selectStock(it.code);
+    li.querySelector(".wl-code").onclick = () => selectStock(it.code);
+    li.querySelector(".wl-del").onclick = (e) => { e.stopPropagation(); removeWatch(it.code); };
+    ul.appendChild(li);
+  });
+}
+
+async function addWatch(code) { renderWatchlist((await api(`/api/watchlist/${code}`, { method: "POST" })).items); watchSet.add(code); updateAddBtn(); loadWatchlist(); }
+async function removeWatch(code) { const { items } = await api(`/api/watchlist/${code}`, { method: "DELETE" }); watchSet.delete(code); renderWatchlist(items); updateAddBtn(); }
+
+function updateAddBtn() {
+  const btn = $("add-btn");
+  if (!currentCode) { btn.hidden = true; return; }
+  btn.hidden = watchSet.has(currentCode);
+}
+
+/* ---------------- Search ---------------- */
+let searchTimer = null;
+function initSearch() {
+  const input = $("search-input");
+  const box = $("search-results");
+  input.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    const q = input.value.trim();
+    if (!q) { box.classList.remove("show"); return; }
+    searchTimer = setTimeout(async () => {
+      try {
+        const { results } = await api(`/api/search?q=${encodeURIComponent(q)}`);
+        box.innerHTML = "";
+        results.forEach((r) => {
+          const d = document.createElement("div");
+          d.className = "item";
+          d.innerHTML = `<span class="c">${r.code}</span><span>${r.name}</span>`;
+          d.onclick = () => { selectStock(r.code); box.classList.remove("show"); input.value = ""; };
+          box.appendChild(d);
+        });
+        box.classList.toggle("show", results.length > 0);
+      } catch { box.classList.remove("show"); }
+    }, 250);
+  });
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".search")) box.classList.remove("show");
+  });
+}
+
+/* ---------------- Stock detail ---------------- */
+const _stockMem = new Map();  // 会话内股票详情缓存（含 K 线，太大不入 localStorage）
+
+function renderStock(d) {
+  renderHeader(d);
+  renderVerdict(d.analysis);
+  renderCharts(d);
+  renderSignals(d.analysis);
+}
+
+async function selectStock(code) {
+  currentCode = code;
+  const out = $("ai-output");
+  out.classList.add("placeholder");
+  out.textContent = "点击右上「用我的 LLM 分析」，由你接入的大模型基于真实指标流式生成点评。";
+  document.querySelectorAll("#watchlist li").forEach((li) =>
+    li.classList.toggle("active", li.dataset.code === code));
+  updateAddBtn();
+  loadFundamentals(code);
+
+  const cached = _stockMem.get(code);
+  if (cached) renderStock(cached);   // 立即用缓存渲染（瞬开）
+  else showLoading(true);
+  try {
+    const d = await api(`/api/stock/${code}?days=160`);  // 后台取新数据
+    _stockMem.set(code, d);
+    if (currentCode === code) renderStock(d);  // 用户未切走才回填
+  } catch (e) {
+    if (!cached) $("verdict").textContent = "加载失败：" + e.message;
+  } finally {
+    showLoading(false);
+  }
+}
+
+function renderHeader(d) {
+  $("stock-name").textContent = d.name;
+  $("stock-code").textContent = d.code;
+  $("demo-tag").hidden = !d.is_demo;
+  const up = d.quote.change >= 0;
+  $("price").textContent = d.quote.close.toFixed(2);
+  $("price").className = "price " + (up ? "up" : "down");
+  const sign = up ? "+" : "";
+  $("change").textContent = `${sign}${d.quote.change.toFixed(2)}  (${sign}${d.quote.pct.toFixed(2)}%)`;
+  $("change").className = "change " + (up ? "up" : "down");
+}
+
+function renderVerdict(a) {
+  const v = $("verdict");
+  v.textContent = "综合判断：" + a.verdict;
+  v.className = "verdict " + a.verdict_tone;
+  $("cnt-bull").textContent = a.counts.bullish;
+  $("cnt-bear").textContent = a.counts.bearish;
+  $("cnt-warn").textContent = a.counts.warning;
+}
+
+const TONE_LABEL = { bullish: "偏多", bearish: "偏空", warning: "风险", neutral: "中性" };
+function renderSignals(a) {
+  const wrap = $("signals");
+  wrap.innerHTML = "";
+  a.signals.forEach((s) => {
+    const el = document.createElement("div");
+    el.className = "sig " + s.tone;
+    el.innerHTML = `<div class="sig-head"><span class="sig-dim">${s.dim}</span><span class="sig-label">${s.label}</span></div><div class="sig-text">${s.text}</div>`;
+    wrap.appendChild(el);
+  });
+  $("summary").textContent = a.summary;
+  $("disclaimer").textContent = a.disclaimer;
+}
+
+/* ---------------- Charts (ECharts, 3 grids) ---------------- */
+function renderCharts(d) {
+  if (!chart) chart = echarts.init($("chart-main"), null, { renderer: "canvas" });
+  const k = d.kline;
+  const axisStyle = { axisLine: { lineStyle: { color: "#232d3b" } }, axisLabel: { color: "#9aa7b6" }, splitLine: { lineStyle: { color: "#1a232f" } } };
+
+  const option = {
+    backgroundColor: "transparent",
+    animation: false,
+    legend: {
+      data: ["MA5", "MA20", "MA60", "BOLL上轨", "BOLL下轨"],
+      top: 4, textStyle: { color: "#9aa7b6" }, itemWidth: 14, itemHeight: 8,
+    },
+    tooltip: {
+      trigger: "axis", axisPointer: { type: "cross" },
+      backgroundColor: "#1a232f", borderColor: "#232d3b", textStyle: { color: "#e6edf3" },
+    },
+    axisPointer: { link: [{ xAxisIndex: "all" }], label: { backgroundColor: "#2f81f7" } },
+    grid: [
+      { left: 56, right: 20, top: 36, height: "48%" },
+      { left: 56, right: 20, top: "60%", height: "12%" },
+      { left: 56, right: 20, top: "76%", height: "16%" },
+    ],
+    xAxis: [
+      { type: "category", data: k.dates, gridIndex: 0, boundaryGap: true, axisLine: { lineStyle: { color: "#232d3b" } }, axisLabel: { show: false } },
+      { type: "category", data: k.dates, gridIndex: 1, axisLabel: { show: false }, axisLine: { lineStyle: { color: "#232d3b" } } },
+      { type: "category", data: k.dates, gridIndex: 2, axisLine: { lineStyle: { color: "#232d3b" } }, axisLabel: { color: "#9aa7b6" } },
+    ],
+    yAxis: [
+      { scale: true, gridIndex: 0, ...axisStyle },
+      { scale: true, gridIndex: 1, name: "量", nameTextStyle: { color: "#5f6e7e" }, axisLabel: { show: false }, splitLine: { show: false }, axisLine: { lineStyle: { color: "#232d3b" } } },
+      { scale: true, gridIndex: 2, name: "MACD", nameTextStyle: { color: "#5f6e7e" }, ...axisStyle },
+    ],
+    dataZoom: [
+      { type: "inside", xAxisIndex: [0, 1, 2], start: 55, end: 100 },
+      { type: "slider", xAxisIndex: [0, 1, 2], bottom: 4, height: 16, start: 55, end: 100, borderColor: "#232d3b", textStyle: { color: "#5f6e7e" } },
+    ],
+    series: [
+      {
+        name: "K线", type: "candlestick", data: k.ohlc, xAxisIndex: 0, yAxisIndex: 0,
+        itemStyle: { color: RED, color0: GREEN, borderColor: RED, borderColor0: GREEN },
+      },
+      { name: "MA5", type: "line", data: k.ma5, xAxisIndex: 0, yAxisIndex: 0, smooth: true, showSymbol: false, lineStyle: { width: 1, color: "#e3b341" } },
+      { name: "MA20", type: "line", data: k.ma20, xAxisIndex: 0, yAxisIndex: 0, smooth: true, showSymbol: false, lineStyle: { width: 1, color: "#2f81f7" } },
+      { name: "MA60", type: "line", data: k.ma60, xAxisIndex: 0, yAxisIndex: 0, smooth: true, showSymbol: false, lineStyle: { width: 1, color: "#a371f7" } },
+      { name: "BOLL上轨", type: "line", data: k.boll_upper, xAxisIndex: 0, yAxisIndex: 0, showSymbol: false, lineStyle: { width: 1, type: "dashed", color: "#6b7785" } },
+      { name: "BOLL下轨", type: "line", data: k.boll_lower, xAxisIndex: 0, yAxisIndex: 0, showSymbol: false, lineStyle: { width: 1, type: "dashed", color: "#6b7785" } },
+      {
+        name: "成交量", type: "bar", data: k.volume, xAxisIndex: 1, yAxisIndex: 1,
+        itemStyle: {
+          color: (p) => {
+            const o = k.ohlc[p.dataIndex];
+            return o && o[1] >= o[0] ? RED : GREEN;
+          },
+        },
+      },
+      {
+        name: "MACD", type: "bar", data: k.macd, xAxisIndex: 2, yAxisIndex: 2,
+        itemStyle: { color: (p) => (p.data >= 0 ? RED : GREEN) },
+      },
+      { name: "DIF", type: "line", data: k.dif, xAxisIndex: 2, yAxisIndex: 2, showSymbol: false, lineStyle: { width: 1, color: "#e3b341" } },
+      { name: "DEA", type: "line", data: k.dea, xAxisIndex: 2, yAxisIndex: 2, showSymbol: false, lineStyle: { width: 1, color: "#2f81f7" } },
+    ],
+  };
+  chart.setOption(option, true);
+}
+
+window.addEventListener("resize", () => chart && chart.resize());
+
+/* ---------------- LLM 接入（多档管理 + 切换） ---------------- */
+async function loadActiveModel() {
+  try {
+    const c = await api("/api/llm/config");
+    $("ai-model").textContent = c.configured ? `· ${c.model}` : "· 未配置";
+  } catch {}
+}
+
+function resetForm() {
+  $("cfg-id").value = "";
+  $("cfg-name").value = "";
+  $("cfg-base").value = "";
+  $("cfg-key").value = "";
+  $("cfg-key").placeholder = "sk-...（本地保存，不上传）";
+  $("cfg-model").value = "";
+  $("form-title").textContent = "新增接入";
+  $("cfg-reset").hidden = true;
+}
+
+async function renderProfiles() {
+  const wrap = $("profile-list");
+  try {
+    const { active, profiles } = await api("/api/llm/profiles");
+    if (!profiles.length) {
+      wrap.innerHTML = '<div class="profile-empty">还没有配置。在下方填写并保存第一套接入。</div>';
+    } else {
+      wrap.innerHTML = "";
+      profiles.forEach((p) => {
+        const row = document.createElement("div");
+        row.className = "profile-row" + (p.id === active ? " active" : "");
+        row.innerHTML =
+          `<input type="radio" name="active-profile" ${p.id === active ? "checked" : ""} />` +
+          `<div class="p-main"><div class="p-name">${p.name}${p.id === active ? ' <span class="p-act">· 使用中</span>' : ""}</div>` +
+          `<div class="p-meta">${p.model || "?"} · ${p.base_url} · ${p.configured ? p.api_key_masked : "无 key"}</div></div>` +
+          `<button class="p-edit">编辑</button><button class="p-del">删除</button>`;
+        row.querySelector('input[type="radio"]').onclick = () => setActiveProfile(p.id);
+        row.querySelector(".p-main").onclick = () => setActiveProfile(p.id);
+        row.querySelector(".p-edit").onclick = (e) => { e.stopPropagation(); editProfile(p); };
+        row.querySelector(".p-del").onclick = (e) => { e.stopPropagation(); deleteProfile(p.id); };
+        wrap.appendChild(row);
+      });
+    }
+  } catch (e) {
+    wrap.innerHTML = `<div class="profile-empty">加载失败：${e.message}</div>`;
+  }
+}
+
+async function setActiveProfile(id) {
+  try {
+    await api("/api/llm/active", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    renderProfiles();
+    loadActiveModel();
+  } catch {}
+}
+
+function editProfile(p) {
+  $("cfg-id").value = p.id;
+  $("cfg-name").value = p.name;
+  $("cfg-base").value = p.base_url;
+  $("cfg-model").value = p.model;
+  $("cfg-key").value = "";
+  $("cfg-key").placeholder = p.configured ? "已配置：" + p.api_key_masked + "（留空则不修改）" : "sk-...";
+  $("form-title").textContent = "编辑接入：" + p.name;
+  $("cfg-reset").hidden = false;
+}
+
+async function deleteProfile(id) {
+  try {
+    await api(`/api/llm/profiles/${id}`, { method: "DELETE" });
+    if ($("cfg-id").value === id) resetForm();
+    renderProfiles();
+    loadActiveModel();
+  } catch {}
+}
+
+function openModal() { $("llm-modal").hidden = false; resetForm(); renderProfiles(); }
+function closeModal() { $("llm-modal").hidden = true; }
+
+async function saveLlmConfig() {
+  const status = $("cfg-status");
+  const base = $("cfg-base").value.trim();
+  const model = $("cfg-model").value.trim();
+  const id = $("cfg-id").value;
+  if (!id && (!base || !model)) {
+    status.textContent = "请至少填写 Base URL 和 Model"; status.className = "cfg-status err";
+    return;
+  }
+  status.textContent = "保存中…"; status.className = "cfg-status";
+  try {
+    const body = { name: $("cfg-name").value.trim(), base_url: base, model };
+    if (id) body.id = id;
+    const key = $("cfg-key").value.trim();
+    if (key) body.api_key = key;
+    await api("/api/llm/profiles", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    status.textContent = "已保存 ✓"; status.className = "cfg-status ok";
+    resetForm();
+    renderProfiles();
+    loadActiveModel();
+    setTimeout(() => (status.textContent = ""), 1500);
+  } catch (e) {
+    status.textContent = "保存失败：" + e.message;
+    status.className = "cfg-status err";
+  }
+}
+
+async function runAiAnalysis() {
+  if (!currentCode) return;
+  const out = $("ai-output");
+  const btn = $("ai-btn");
+  btn.disabled = true;
+  out.classList.remove("placeholder");
+  out.textContent = "正在请求你的 LLM…";
+  try {
+    const res = await fetch(`/api/stock/${currentCode}/ai/stream?days=160`, { method: "POST" });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    out.textContent = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      out.textContent += decoder.decode(value, { stream: true });
+      out.scrollTop = out.scrollHeight;
+    }
+  } catch (e) {
+    out.textContent = "调用失败：" + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+$("llm-settings-btn").onclick = openModal;
+$("llm-close").onclick = closeModal;
+$("cfg-save").onclick = saveLlmConfig;
+$("cfg-reset").onclick = resetForm;
+$("ai-btn").onclick = runAiAnalysis;
+$("llm-modal").addEventListener("click", (e) => { if (e.target.id === "llm-modal") closeModal(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
+
+/* ---------------- Fundamentals ---------------- */
+function renderFundamentals(d) {
+  const el = $("fundamentals");
+  {
+    const v = d.valuation || {};
+    const metrics = [];
+    if (v.pe_ttm != null) metrics.push(["市盈率 PE(TTM)", v.pe_ttm]);
+    if (v.pb != null) metrics.push(["市净率 PB", v.pb]);
+    if (d.fund_flow && d.fund_flow.main_net != null)
+      metrics.push(["主力净流入(万)", d.fund_flow.main_net]);
+
+    let html = "";
+    if (metrics.length) {
+      html += '<div class="funda-metrics">' +
+        metrics.map(([l, val]) => `<div class="funda-metric"><div class="v">${val}</div><div class="l">${l}</div></div>`).join("") +
+        "</div>";
+    }
+    const fin = d.financials || [];
+    if (fin.length) {
+      const cols = ["报告期", "营业总收入", "营业总收入同比增长率", "净利润", "净利润同比增长率", "净资产收益率", "销售毛利率", "资产负债率", "基本每股收益"];
+      const present = cols.filter((c) => fin.some((r) => r[c] != null));
+      html += '<table class="funda-table"><thead><tr>' +
+        present.map((c) => `<th>${c.replace("营业总收入", "营收").replace("同比增长率", "同比").replace("净资产收益率", "ROE").replace("销售毛利率", "毛利率").replace("基本每股收益", "EPS")}</th>`).join("") +
+        "</tr></thead><tbody>" +
+        fin.map((r) => "<tr>" + present.map((c) => `<td>${r[c] == null ? "—" : r[c]}</td>`).join("") + "</tr>").join("") +
+        "</tbody></table>";
+    }
+    el.innerHTML = html || '<span class="funda-empty">该股暂无可用的基本面数据（数据源可能临时不可用）。</span>';
+  }
+}
+
+async function loadFundamentals(code) {
+  const el = $("fundamentals");
+  if (!cacheGet("funda:" + code)) el.innerHTML = skeleton(3, "funda-skel");
+  try {
+    await swr("funda:" + code, `/api/stock/${code}/fundamentals`, (d) => renderFundamentals(d));
+  } catch (e) {
+    el.innerHTML = `<span class="funda-empty">基本面加载失败：${e.message}</span>`;
+  }
+}
+
+/* ---------------- View nav ---------------- */
+function switchView(view) {
+  document.querySelectorAll(".nav-tab").forEach((t) => t.classList.toggle("active", t.dataset.view === view));
+  document.querySelectorAll(".view").forEach((v) => (v.hidden = v.id !== "view-" + view));
+  if (view === "market") loadMarket();
+  if (view === "overview") loadOverview();
+  if (view === "scan") loadScanRules();
+  if (view === "stock" && chart) setTimeout(() => chart.resize(), 50);
+}
+document.querySelectorAll(".nav-tab").forEach((t) => (t.onclick = () => switchView(t.dataset.view)));
+
+/* ---------------- Market（大盘） ---------------- */
+function renderMarket(d) {
+  const idxBox = $("market-indices");
+  const brBox = $("market-breadth");
+  {
+    idxBox.innerHTML = "";
+    d.indices.forEach((ix) => {
+      const up = ix.pct >= 0;
+      const col = up ? "var(--bear)" : "var(--bull)";
+      const card = document.createElement("div");
+      card.className = "mk-card";
+      card.innerHTML =
+        `<div class="mk-name">${ix.name}</div>` +
+        `<div class="mk-price" style="color:${col}">${ix.price}</div>` +
+        `<div class="mk-pct" style="color:${col}">${up ? "+" : ""}${ix.change} (${up ? "+" : ""}${ix.pct}%)</div>`;
+      idxBox.appendChild(card);
+    });
+    const b = d.breadth || {};
+    if (b.up != null || b.down != null) {
+      const total = (b.up || 0) + (b.down || 0) + (b.flat || 0);
+      const upPct = total ? Math.round(((b.up || 0) / total) * 100) : 0;
+      brBox.innerHTML =
+        `<div class="br-title">全市场涨跌家数${d.is_demo ? "（演示）" : ""}</div>` +
+        `<div class="br-bar"><span style="width:${upPct}%"></span></div>` +
+        `<div class="br-nums">` +
+        `<span class="bull">上涨 ${b.up ?? "-"}</span>` +
+        `<span class="neutral">平盘 ${b.flat ?? "-"}</span>` +
+        `<span class="bear">下跌 ${b.down ?? "-"}</span>` +
+        `<span class="bull">涨停 ${b.limit_up ?? "-"}</span>` +
+        `<span class="bear">跌停 ${b.limit_down ?? "-"}</span>` +
+        `</div>`;
+    }
+    if (d.is_demo) idxBox.insertAdjacentHTML("afterbegin", '<div class="mk-demo">演示数据（实时源暂不可用）</div>');
+  }
+}
+
+async function loadMarket() {
+  const idxBox = $("market-indices");
+  if (!cacheGet("market")) idxBox.innerHTML = skeleton(6, "mk-skel");  // 无缓存才显骨架
+  try {
+    await swr("market", "/api/market", (d) => renderMarket(d));
+  } catch (e) {
+    idxBox.innerHTML = `<span class="funda-empty">加载失败：${e.message}</span>`;
+  }
+}
+$("mk-refresh").onclick = loadMarket;
+
+/* ---------------- Overview ---------------- */
+function renderOverview(items) {
+  const grid = $("overview-grid");
+  {
+    grid.innerHTML = "";
+    items.forEach((it) => {
+      const card = document.createElement("div");
+      card.className = "ov-card";
+      if (it.error) {
+        card.innerHTML = `<div class="ov-top"><span class="ov-name">${it.name}<span class="ov-code">${it.code}</span></span></div><div class="ov-verdict neutral">加载失败</div>`;
+      } else {
+        const up = it.pct >= 0;
+        const dots = it.signals.map((s) => `<span class="ov-dot"><i class="${s.tone}"></i>${s.dim}</span>`).join("");
+        card.innerHTML =
+          `<div class="ov-top"><span class="ov-name">${it.name}<span class="ov-code">${it.code}</span></span>` +
+          `<span class="ov-price ${up ? "up" : "down"}" style="color:${up ? "var(--bear)" : "var(--bull)"}">${it.close} (${up ? "+" : ""}${it.pct}%)</span></div>` +
+          `<div class="ov-verdict ${it.verdict_tone}">${it.verdict}</div>` +
+          `<div class="ov-dots">${dots}</div>`;
+      }
+      card.onclick = () => { switchView("stock"); selectStock(it.code); };
+      grid.appendChild(card);
+    });
+  }
+}
+
+async function loadOverview() {
+  const grid = $("overview-grid");
+  const cached = cacheGet("overview");
+  if (!cached) grid.innerHTML = skeleton(Math.max(watchSet.size, 3), "ov-skel");  // 无缓存才显骨架
+  try {
+    await swr("overview", "/api/overview", (d) => renderOverview(d.items));
+  } catch (e) {
+    grid.innerHTML = `<span class="funda-empty">加载失败：${e.message}</span>`;
+  }
+}
+$("ov-refresh").onclick = loadOverview;
+
+/* ---------------- Scanner ---------------- */
+let scanRulesLoaded = false;
+async function loadScanRules() {
+  if (scanRulesLoaded) return;
+  try {
+    const { rules } = await api("/api/scan/rules");
+    $("scan-rules").innerHTML = rules.map((r) =>
+      `<label class="scan-rule"><input type="checkbox" value="${r.id}" />${r.label}</label>`).join("");
+    scanRulesLoaded = true;
+  } catch {}
+}
+function buildScanRow(it) {
+  const row = document.createElement("div");
+  row.className = "scan-row";
+  const up = it.pct >= 0;
+  row.innerHTML =
+    `<span class="sr-name">${it.name}<span class="ov-code">${it.code}</span></span>` +
+    `<span class="ov-price" style="color:${up ? "var(--bear)" : "var(--bull)"}">${it.close} (${up ? "+" : ""}${it.pct}%)</span>` +
+    `<span class="sr-tags">${it.matched.map((m) => `<span class="scan-tag">${m}</span>`).join("")}</span>`;
+  row.onclick = () => { switchView("stock"); selectStock(it.code); };
+  return row;
+}
+
+let scanES = null;
+function runScan() {
+  const rules = [...document.querySelectorAll("#scan-rules input:checked")].map((i) => i.value);
+  const scope = $("scan-scope").value;
+  const box = $("scan-results");
+  if (!rules.length) { box.innerHTML = '<div class="scan-msg">请至少勾选一个规则。</div>'; return; }
+  if (scanES) scanES.close();  // 关闭上一次未结束的流
+
+  box.innerHTML = '<div class="scan-msg" id="scan-head">扫描中…<span id="scan-prog"></span></div><div id="scan-rows"></div>';
+  const rows = $("scan-rows");
+  let hits = 0;
+  const url = `/api/scan/stream?rules=${encodeURIComponent(rules.join(","))}&scope=${encodeURIComponent(scope)}`;
+  const es = new EventSource(url);
+  scanES = es;
+
+  es.addEventListener("progress", (e) => {
+    const p = JSON.parse(e.data);
+    const el = $("scan-prog");
+    if (el) el.textContent = ` ${p.done}/${p.total}`;
+  });
+  es.addEventListener("hit", (e) => {
+    hits++;
+    rows.appendChild(buildScanRow(JSON.parse(e.data)));  // 边扫边出
+  });
+  es.addEventListener("done", (e) => {
+    es.close(); scanES = null;
+    const d = JSON.parse(e.data);
+    const info = d.pool_total
+      ? `池 ${d.pool_total} 只，实扫 ${d.scanned} 只${d.failed ? `（${d.failed} 只取数失败已跳过）` : ""}`
+      : `扫描 ${d.scanned} 只`;
+    const head = $("scan-head");
+    if (head) head.textContent = d.count ? `${info}，命中 ${d.count} 只：` : `${info}，暂无同时满足所选规则的标的。`;
+  });
+  es.onerror = () => {
+    es.close(); scanES = null;
+    if (!hits) { const head = $("scan-head"); if (head) head.textContent = "扫描中断（连接错误），请重试。"; }
+  };
+}
+$("scan-run").onclick = runScan;
+
+/* ---------------- Chat ---------------- */
+function addChatMsg(role, text, used) {
+  const log = $("chat-log");
+  const div = document.createElement("div");
+  div.className = "chat-msg " + role;
+  div.textContent = text;
+  if (used && used.length) {
+    const u = document.createElement("span");
+    u.className = "used";
+    u.textContent = "参考数据：" + used.map((x) => `${x.name}(${x.code})`).join("、");
+    div.appendChild(u);
+  }
+  log.appendChild(div);
+  div.scrollIntoView({ behavior: "smooth", block: "end" });
+  return div;
+}
+async function sendChat() {
+  const input = $("chat-text");
+  const q = input.value.trim();
+  if (!q) return;
+  input.value = "";
+  addChatMsg("user", q);
+  const thinking = addChatMsg("bot", "思考中…");
+  try {
+    const d = await api("/api/chat", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: q }),
+    });
+    thinking.textContent = d.text;
+    if (d.used && d.used.length) {
+      const u = document.createElement("span");
+      u.className = "used";
+      u.textContent = "参考数据：" + d.used.map((x) => `${x.name}(${x.code})`).join("、");
+      thinking.appendChild(u);
+    }
+  } catch (e) {
+    thinking.textContent = "回答失败：" + e.message;
+  }
+}
+$("chat-send").onclick = sendChat;
+$("chat-text").addEventListener("keydown", (e) => { if (e.key === "Enter") sendChat(); });
+
+/* ---------------- Boot ---------------- */
+$("add-btn").onclick = () => currentCode && addWatch(currentCode);
+initSearch();
+loadHealth();
+loadWatchlist();
+loadActiveModel();

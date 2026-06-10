@@ -1,0 +1,106 @@
+# A股 AI 辅助看板（本地前后端）
+
+一个面向「炒股小白」的本地研究助手：用 **akshare** 抓 A 股真实数据，计算常用技术指标，
+把信号翻译成「人话」，并提供一个美观的交互式前端（K线 / 成交量 / MACD 图、大盘、自选总览、选股扫描、AI 问答），
+还能接入**你自己的大模型**生成深度点评。
+
+> 仅供研究与学习，**不构成投资建议**。指标存在滞后性，请先用模拟盘 / 小资金验证，且不要把真实下单权限交给任何工具。
+
+## 功能概览
+
+- **个股详情**：K线 + MA/BOLL、成交量、MACD/RSI/KDJ；自动生成中文「综合判断」与信号灯；估值/财务/资金流基本面面板。
+- **大盘**：上证/深成/创业板/科创50/沪深300/上证50 实时点位，全市场涨跌家数。
+- **自选总览**：把自选股列成「体检表」，一眼看涨跌与看多/看空/警示信号数量。
+- **选股扫描**：按规则（均线多头、MACD 金叉、RSI 超买超卖、放量、逼近布林下轨）筛股；范围支持**自选股 / 上证50 / 沪深300**；结果**流式输出**（边扫边出 + 进度）。
+- **AI 问答**：用大白话提问，系统自动识别问题里的股票并带上真实指标交给你的 LLM 作答。
+- **AI 深度点评**：接入 OpenAI 兼容大模型，对个股流式生成结构化点评；支持保存多套 API 配置并随时切换。
+
+## 技术栈
+
+- 后端：Python + FastAPI + akshare + pandas/numpy
+- 前端：原生 HTML/CSS/JS + ECharts（无需 npm 构建，刷新即用）
+- 存储：SQLite（K线/基本面缓存，`data/cache.db`）+ 本地 JSON（自选股 / LLM 配置）
+
+## 快速开始
+
+```bash
+# 方式一：一键脚本（默认端口 8777，可用 PORT=xxxx 覆盖）
+bash run.sh
+
+# 方式二：手动
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn backend.app:app --reload --port 8777
+```
+
+启动后浏览器打开 <http://127.0.0.1:8777>（端口 8000 常被其他服务占用，故默认用 8777）。
+
+- 左侧搜索框输入代码或名称（如 `600519` / `茅台`）即可切换股票，自选股可增删并本地保存。
+- 数据源：优先东方财富，失败自动切换新浪，仍失败则回退离线演示数据（界面会标注「演示」）。
+
+## 接入你自己的 LLM
+
+本项目用 **OpenAI 兼容协议** 接大模型，支持 OpenAI / DeepSeek / Kimi / 通义 / OpenRouter / 本地 Ollama 等。
+
+两种配置方式（任选其一）：
+
+1. **网页配置（推荐）**：点左下角「⚙ AI」，可保存多套接入（名称 / Base URL / API Key / Model），选中哪套就用哪套。配置存于 `data/llm_config.json`，**仅本地、不上传、已被 .gitignore 忽略**。
+2. **环境变量 / `.env`**：复制 `.env.example` 为 `.env` 并填写 `LLM_BASE_URL / LLM_API_KEY / LLM_MODEL`。
+
+配置后，在「AI 深度点评」区域点击「用我的 LLM 分析」，模型会基于真实指标流式生成结构化中文点评。
+
+## 项目结构
+
+```
+backend/
+  app.py          FastAPI 路由 + 前端静态托管（总览/扫描线程池并发；流式扫描 SSE）
+  data.py         akshare 取数：先读 SQLite → 仅增量补缺失区间 → 回退演示数据
+  db.py           SQLite 持久层（K线/基本面落盘，WAL；保留窗口 + LRU 清理）
+  indicators.py   MA / MACD / RSI / 布林带 / KDJ
+  analysis.py     规则化人话信号与风险提示
+  llm.py          OpenAI 兼容 LLM 客户端（多档配置、流式输出）
+  storage.py      自选股 JSON 存储
+frontend/
+  index.html / styles.css / app.js   交互式看板（ECharts；SWR 客户端缓存 + 骨架屏）
+data/                                （自动生成，已被 .gitignore 忽略）
+  cache.db        K线/基本面 SQLite 缓存（可删除重建）
+  watchlist.json  自选股
+  llm_config.json LLM 配置（含 API key）
+```
+
+## 架构与性能要点
+
+- **持久化**：K线/基本面落盘到 `data/cache.db`，页面优先读本地库（毫秒级）；akshare 只增量补当天数据，重启不丢、TTL 过期也不全量冷拉。
+- **并发**：总览/扫描用线程池并发处理；但所有 akshare 调用**收敛到单一线程**串行执行——因为部分接口内部用 mini_racer(V8) 执行 JS，V8 非线程安全，多线程并发会导致进程崩溃。
+- **前端体验**：stale-while-revalidate（先显本地旧数据再后台回填）+ 骨架屏 + 流式扫描（SSE 边扫边出）。
+- **数据清理**：每只股票仅保留最近 `450` 天 K 线；股票数超过 `400` 只时按最近访问 LRU 淘汰（自选股受保护），并 `VACUUM` 回收空间。删除 `data/cache.db` 可整体清空重建。
+
+## API 一览
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/health` | 健康检查 + akshare 是否可用 |
+| GET | `/api/search?q=` | 按代码/名称搜索 |
+| GET | `/api/stock/{code}?days=160` | K线 + 指标 + 分析 |
+| GET | `/api/stock/{code}/fundamentals` | 估值 + 财务摘要 + 资金流 |
+| GET | `/api/watchlist`、POST/DELETE `/api/watchlist/{code}` | 自选股读取/增删 |
+| GET | `/api/market` | 大盘指数 + 全市场涨跌家数 |
+| GET | `/api/overview` | 自选股总览（信号汇总） |
+| GET | `/api/scan/rules` | 可用筛选规则 |
+| POST | `/api/scan` | 选股扫描（一次性返回） |
+| GET | `/api/scan/stream` | 选股扫描（SSE 流式，边扫边出） |
+| POST | `/api/chat` | 自然语言问答（自动识别股票） |
+| GET | `/api/llm/config` | 当前激活配置摘要（隐藏 key） |
+| GET | `/api/llm/profiles` | 列出所有 LLM 接入档 + 当前激活 |
+| POST | `/api/llm/profiles` | 新增/编辑接入档（含 id 则编辑） |
+| DELETE | `/api/llm/profiles/{id}` | 删除某接入档 |
+| POST | `/api/llm/active` | 切换当前使用的接入档 |
+| POST | `/api/stock/{code}/ai` | 用你的 LLM 生成深度点评 |
+| POST | `/api/stock/{code}/ai/stream` | 流式生成点评 |
+
+## 下一步可扩展
+
+- 后台定时增量刷新（开盘后自动更新自选股）；
+- 增加每日复盘报告导出；
+- 把你的选股纪律写成 `SKILL.md`，让 Cursor 按你的规则筛股。

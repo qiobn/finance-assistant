@@ -1,0 +1,5 @@
+fastapi>=0.115
+uvicorn[standard]>=0.32
+akshare>=1.14
+pandas>=2.2
+numpy>=1.26

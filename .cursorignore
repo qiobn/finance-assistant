@@ -1,0 +1,13 @@
+# 不索引/监听这些重目录，避免编辑器吃满 CPU
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+node_modules/
+data/
+*.log
+.DS_Store

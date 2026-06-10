@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>A股 AI 辅助看板</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="logo">▦</span>
+        <div>
+          <div class="brand-title">A股 AI 看板</div>
+          <div class="brand-sub">研究助手 · 非投资建议</div>
+        </div>
+      </div>
+
+      <div class="search">
+        <input id="search-input" type="text" placeholder="搜索代码/名称，如 600519 / 茅台" autocomplete="off" />
+        <div id="search-results" class="search-results"></div>
+      </div>
+
+      <div class="watchlist-head">
+        <span>自选股</span>
+        <span id="data-badge" class="badge"></span>
+      </div>
+      <ul id="watchlist" class="watchlist"></ul>
+
+      <div class="sidebar-foot">
+        <span id="health-dot" class="dot"></span>
+        <span id="health-text">连接中…</span>
+        <button id="llm-settings-btn" class="gear" title="AI 设置">⚙ AI</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <nav class="topnav">
+        <button class="nav-tab" data-view="market">大盘</button>
+        <button class="nav-tab active" data-view="stock">个股详情</button>
+        <button class="nav-tab" data-view="overview">自选总览</button>
+        <button class="nav-tab" data-view="scan">选股扫描</button>
+        <button class="nav-tab" data-view="chat">AI 问答</button>
+      </nav>
+
+      <!-- ===== 大盘 ===== -->
+      <section id="view-market" class="view" hidden>
+        <div class="view-head">
+          <h2>大盘行情</h2>
+          <button id="mk-refresh" class="add-btn">刷新</button>
+        </div>
+        <div id="market-indices" class="market-indices"></div>
+        <div id="market-breadth" class="market-breadth"></div>
+        <p class="scan-note">指数与涨跌家数来自公开行情，约 5 分钟刷新一次。</p>
+      </section>
+
+      <!-- ===== 个股详情 ===== -->
+      <section id="view-stock" class="view">
+        <header class="topbar">
+          <div class="stock-meta">
+            <h1 id="stock-name">—</h1>
+            <span id="stock-code" class="code">—</span>
+            <span id="demo-tag" class="demo-tag" hidden>演示数据</span>
+          </div>
+          <div class="quote">
+            <span id="price" class="price">—</span>
+            <span id="change" class="change">—</span>
+            <button id="add-btn" class="add-btn" hidden>+ 加入自选</button>
+          </div>
+        </header>
+
+        <section class="verdict-bar">
+          <div id="verdict" class="verdict">选择左侧股票开始分析</div>
+          <div class="counts">
+            <span class="cnt bull">多 <b id="cnt-bull">0</b></span>
+            <span class="cnt bear">空 <b id="cnt-bear">0</b></span>
+            <span class="cnt warn">险 <b id="cnt-warn">0</b></span>
+          </div>
+        </section>
+
+        <section class="charts">
+          <div id="chart-main" class="chart"></div>
+        </section>
+
+        <section class="analysis">
+          <h2>基本面</h2>
+          <div id="fundamentals" class="funda">—</div>
+        </section>
+
+        <section class="analysis">
+          <h2>信号解读</h2>
+          <div id="signals" class="signals"></div>
+          <p id="summary" class="summary"></p>
+          <p id="disclaimer" class="disclaimer"></p>
+        </section>
+
+        <section class="analysis ai-section">
+          <div class="ai-head">
+            <h2>AI 深度点评 <span id="ai-model" class="ai-model"></span></h2>
+            <button id="ai-btn" class="ai-btn">用我的 LLM 分析</button>
+          </div>
+          <div id="ai-output" class="ai-output">点击右上「用我的 LLM 分析」，由你接入的大模型基于真实指标流式生成点评。需先在左下「⚙ AI」配置。</div>
+        </section>
+      </section>
+
+      <!-- ===== 自选总览 ===== -->
+      <section id="view-overview" class="view" hidden>
+        <div class="view-head">
+          <h2>自选总览</h2>
+          <button id="ov-refresh" class="add-btn">刷新</button>
+        </div>
+        <div id="overview-grid" class="overview-grid"></div>
+      </section>
+
+      <!-- ===== 选股扫描 ===== -->
+      <section id="view-scan" class="view" hidden>
+        <div class="view-head"><h2>选股扫描</h2></div>
+        <div class="scan-box">
+          <div class="scan-scope">
+            <label>扫描范围</label>
+            <select id="scan-scope">
+              <option value="watchlist">自选股（快）</option>
+              <option value="sz50">上证50 成分股</option>
+              <option value="hs300">沪深300 成分股</option>
+            </select>
+          </div>
+          <div id="scan-rules" class="scan-rules"></div>
+          <p class="scan-note">筛选<strong>同时满足</strong>所选规则的标的。全市场范围需逐只取数，首次较慢（已做缓存与数量上限）。</p>
+          <button id="scan-run" class="ai-btn">开始扫描</button>
+        </div>
+        <div id="scan-results" class="scan-results"></div>
+      </section>
+
+      <!-- ===== AI 问答 ===== -->
+      <section id="view-chat" class="view" hidden>
+        <div class="view-head">
+          <h2>AI 问答</h2>
+          <span class="chat-hint">基于真实指标作答，可问「比较茅台和宁德时代」「000001 现在技术面如何」</span>
+        </div>
+        <div id="chat-log" class="chat-log"></div>
+        <div class="chat-input">
+          <input id="chat-text" type="text" placeholder="输入你的问题，回车发送…" autocomplete="off" />
+          <button id="chat-send" class="ai-btn">发送</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- LLM 配置弹窗：多档管理 + 切换 -->
+  <div id="llm-modal" class="modal" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3>管理 LLM 接入</h3>
+        <button id="llm-close" class="modal-close">×</button>
+      </div>
+      <p class="modal-tip">可保存多套 API（OpenAI / DeepSeek / Kimi / 通义 / OpenRouter / 本地 Ollama 等），选中哪套就用哪套。</p>
+
+      <div class="cfg-section-title">已保存的接入</div>
+      <div id="profile-list" class="profile-list"></div>
+
+      <div class="cfg-section-title" id="form-title">新增接入</div>
+      <input id="cfg-id" type="hidden" value="" />
+      <label>名称（便于区分，如「DeepSeek-V4」「本地Qwen」）</label>
+      <input id="cfg-name" type="text" placeholder="给这套配置起个名字" />
+      <label>Base URL</label>
+      <input id="cfg-base" type="text" placeholder="如 https://api.deepseek.com/v1 或 http://localhost:11434/v1" />
+      <label>API Key</label>
+      <input id="cfg-key" type="password" placeholder="sk-...（本地保存，不上传；编辑时留空则不修改）" />
+      <label>Model</label>
+      <input id="cfg-model" type="text" placeholder="如 deepseek-chat / gpt-4o-mini / qwen-plus" />
+      <div class="modal-actions">
+        <span id="cfg-status" class="cfg-status"></span>
+        <button id="cfg-reset" class="add-btn" hidden>取消编辑</button>
+        <button id="cfg-save" class="ai-btn">保存</button>
+      </div>
+
+      <details class="modal-presets">
+        <summary>常见服务示例</summary>
+        <ul>
+          <li><b>DeepSeek</b>：base <code>https://api.deepseek.com/v1</code> · model <code>deepseek-chat</code></li>
+          <li><b>Kimi</b>：base <code>https://api.moonshot.cn/v1</code> · model <code>moonshot-v1-8k</code></li>
+          <li><b>通义千问</b>：base <code>https://dashscope.aliyuncs.com/compatible-mode/v1</code> · model <code>qwen-plus</code></li>
+          <li><b>本地 Ollama</b>：base <code>http://localhost:11434/v1</code> · model <code>qwen2.5</code> · key 随便填</li>
+        </ul>
+      </details>
+    </div>
+  </div>
+
+  <div id="loading" class="loading" hidden><div class="spinner"></div></div>
+  <script src="/app.js"></script>
+</body>
+</html>
