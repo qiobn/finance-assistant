@@ -15,7 +15,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import data, db, llm, storage
+from . import data, db, llm, storage, strategies
 from .analysis import build_analysis, trend_overview
 from .indicators import compute_all
 
@@ -122,6 +122,24 @@ def stock(code: str, days: int = Query(160, ge=30, le=500), adjust: str = "qfq")
 def stock_fundamentals(code: str) -> dict:
     return {"code": str(code).zfill(6), "name": data.name_for(str(code).zfill(6)),
             **data.get_fundamentals(code)}
+
+
+def _build_plan(code: str, days: int = 160, adjust: str = "qfq") -> dict:
+    """规则化「投资大师」操作计划（买入区/止盈/止损/总体倾向），不调用 LLM。"""
+    df, is_demo = data.get_kline(code, days=days, adjust=adjust)
+    if df is None or df.empty:
+        raise HTTPException(status_code=404, detail="未取到该股票数据")
+    df = compute_all(df)
+    trends = trend_overview(df)
+    funda = data.get_fundamentals(code)
+    plan = strategies.build_plan(df, trends, funda)
+    return {"code": str(code).zfill(6), "name": data.name_for(str(code).zfill(6)),
+            "is_demo": is_demo, "plan": plan}
+
+
+@app.get("/api/stock/{code}/plan")
+def stock_plan(code: str, days: int = Query(160, ge=30, le=500), adjust: str = "qfq") -> dict:
+    return _build_plan(code, days, adjust)
 
 
 def _compact(code: str, days: int = 120) -> dict:
@@ -362,24 +380,28 @@ def llm_set_active(payload: dict = Body(...)) -> dict:
 
 
 @app.post("/api/stock/{code}/ai")
-def stock_ai(code: str, days: int = Query(160, ge=30, le=500), adjust: str = "qfq") -> dict:
+def stock_ai(code: str, days: int = Query(160, ge=30, le=500), adjust: str = "qfq",
+             pref: str = Query("balanced")) -> dict:
     payload = _build_stock_payload(code, days, adjust)
     funda = data.get_fundamentals(code)
+    plan = _build_plan(code, days, adjust)["plan"]
     try:
-        text = llm.chat(llm.build_messages(payload, funda))
+        text = llm.chat(llm.build_messages(payload, funda, plan, pref))
     except llm.LLMError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"code": payload["code"], "name": payload["name"], "model": llm.get_config()["model"], "text": text}
 
 
 @app.post("/api/stock/{code}/ai/stream")
-def stock_ai_stream(code: str, days: int = Query(160, ge=30, le=500), adjust: str = "qfq"):
+def stock_ai_stream(code: str, days: int = Query(160, ge=30, le=500), adjust: str = "qfq",
+                    pref: str = Query("balanced")):
     payload = _build_stock_payload(code, days, adjust)
     funda = data.get_fundamentals(code)
+    plan = _build_plan(code, days, adjust)["plan"]
 
     def gen():
         try:
-            for piece in llm.chat_stream(llm.build_messages(payload, funda)):
+            for piece in llm.chat_stream(llm.build_messages(payload, funda, plan, pref)):
                 yield piece
         except llm.LLMError as exc:
             yield f"\n[错误] {exc}"

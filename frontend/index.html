@@ -87,6 +87,16 @@
         </section>
 
         <section class="analysis">
+          <div class="plan-head">
+            <h2>操作建议 <span class="plan-sub">投资大师纪律 · 买入区/止盈/止损</span></h2>
+            <div id="plan-stance" class="plan-stance"></div>
+          </div>
+          <div id="plan-levels" class="plan-levels"></div>
+          <div id="plan-masters" class="plan-masters">—</div>
+          <p id="plan-disclaimer" class="disclaimer"></p>
+        </section>
+
+        <section class="analysis">
           <h2>基本面</h2>
           <div id="fundamentals" class="funda">—</div>
         </section>
@@ -101,9 +111,16 @@
         <section class="analysis ai-section">
           <div class="ai-head">
             <h2>AI 深度点评 <span id="ai-model" class="ai-model"></span></h2>
-            <button id="ai-btn" class="ai-btn">用我的 LLM 分析</button>
+            <div class="ai-ctrl">
+              <select id="ai-pref" title="投资偏好：影响大师视角与买卖价位侧重">
+                <option value="balanced">均衡</option>
+                <option value="short">短线收益</option>
+                <option value="long">长期持有</option>
+              </select>
+              <button id="ai-btn" class="ai-btn">用我的 LLM 分析</button>
+            </div>
           </div>
-          <div id="ai-output" class="ai-output">点击右上「用我的 LLM 分析」，由你接入的大模型基于真实指标流式生成点评。需先在左下「⚙ AI」配置。</div>
+          <div id="ai-output" class="ai-output">选择投资偏好（短线/长期/均衡）后点「用我的 LLM 分析」，由你接入的大模型结合大师纪律给出买卖计划。需先在左下「⚙ AI」配置。</div>
         </section>
       </section>
 

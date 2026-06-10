@@ -352,5 +352,43 @@ body {
 .spinner { width: 34px; height: 34px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* 操作建议（投资大师 Skills） */
+.plan-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.plan-sub { font-size: 12px; color: var(--text-faint); font-weight: 400; }
+.plan-stance .ps { font-size: 13px; font-weight: 600; padding: 4px 12px; border-radius: 14px; }
+.plan-stance .ps.bullish { color: var(--bear); background: rgba(248,81,73,.12); }
+.plan-stance .ps.bearish { color: var(--bull); background: rgba(46,160,67,.12); }
+.plan-stance .ps.warning { color: var(--warn); background: rgba(210,153,34,.12); }
+.plan-stance .ps.neutral { color: var(--text-dim); background: var(--bg-elev); }
+.plan-levels { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.pl-cell { display: flex; flex-direction: column; gap: 2px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; min-width: 76px; }
+.pl-cell i { font-style: normal; font-size: 11px; color: var(--text-faint); }
+.pl-cell b { font-size: 14px; color: var(--text); }
+.plan-masters { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.pm { background: var(--bg-panel); border: 1px solid var(--border); border-left-width: 3px; border-radius: var(--radius); padding: 12px 14px; }
+.pm.bullish { border-left-color: var(--bear); }
+.pm.bearish { border-left-color: var(--bull); }
+.pm.warning { border-left-color: var(--warn); }
+.pm.neutral { border-left-color: var(--neutral); }
+.pm-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pm-name { font-size: 13px; font-weight: 600; }
+.pm-horizon { font-size: 11px; color: var(--text-faint); border: 1px solid var(--border); border-radius: 8px; padding: 1px 7px; }
+.pm-action { margin-left: auto; font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 10px; }
+.pm-action.bullish { color: var(--bear); background: rgba(248,81,73,.14); }
+.pm-action.bearish { color: var(--bull); background: rgba(46,160,67,.14); }
+.pm-action.warning { color: var(--warn); background: rgba(210,153,34,.14); }
+.pm-action.neutral { color: var(--text-dim); background: var(--bg-elev); }
+.pm-levels { display: flex; gap: 14px; margin: 10px 0 8px; }
+.pm-lv { font-size: 13px; color: var(--text); }
+.pm-lv i { font-style: normal; display: block; font-size: 11px; color: var(--text-faint); margin-bottom: 1px; }
+.pm-lv.buy { color: var(--bear); }
+.pm-lv.sl { color: var(--bull); }
+.pm-reason { font-size: 12px; color: var(--text-dim); line-height: 1.6; }
+.skel.plan-skel { height: 110px; margin-bottom: 4px; }
+/* AI 偏好选择 */
+.ai-ctrl { display: flex; align-items: center; gap: 8px; }
+#ai-pref { background: var(--bg-elev); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font-size: 13px; outline: none; cursor: pointer; }
+#ai-pref:focus { border-color: var(--accent); }
+
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
