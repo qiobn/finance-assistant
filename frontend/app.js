@@ -143,6 +143,7 @@ async function selectStock(code) {
     li.classList.toggle("active", li.dataset.code === code));
   updateAddBtn();
   loadFundamentals(code);
+  loadPlan(code);
 
   const cached = _stockMem.get(code);
   if (cached) renderStock(cached);   // 立即用缓存渲染（瞬开）
@@ -380,8 +381,9 @@ async function runAiAnalysis() {
   btn.disabled = true;
   out.classList.remove("placeholder");
   out.textContent = "正在请求你的 LLM…";
+  const pref = $("ai-pref") ? $("ai-pref").value : "balanced";
   try {
-    const res = await fetch(`/api/stock/${currentCode}/ai/stream?days=160`, { method: "POST" });
+    const res = await fetch(`/api/stock/${currentCode}/ai/stream?days=160&pref=${pref}`, { method: "POST" });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -449,6 +451,55 @@ async function loadFundamentals(code) {
     await swr("funda:" + code, `/api/stock/${code}/fundamentals`, (d) => renderFundamentals(d));
   } catch (e) {
     el.innerHTML = `<span class="funda-empty">基本面加载失败：${e.message}</span>`;
+  }
+}
+
+/* ---------------- 操作建议（投资大师 Skills） ---------------- */
+function renderPlan(d) {
+  const plan = d.plan || {};
+  const lv = plan.levels || {};
+  const st = plan.stance || {};
+  $("plan-stance").innerHTML = st.label
+    ? `<span class="ps ${st.tone}">${st.label}</span>` : "";
+
+  const cell = (label, val) =>
+    val == null ? "" : `<span class="pl-cell"><i>${label}</i><b>${val}</b></span>`;
+  $("plan-levels").innerHTML =
+    cell("现价", lv.close) + cell("支撑", lv.support) + cell("压力", lv.resistance) +
+    cell("MA20", lv.ma20) + cell("MA60", lv.ma60) +
+    cell("布林下轨", lv.boll_lower) + cell("布林上轨", lv.boll_upper);
+
+  const masters = plan.masters || [];
+  $("plan-masters").innerHTML = masters.map((m) => {
+    const zone = m.buy_zone ? `${m.buy_zone[0]} ~ ${m.buy_zone[1]}` : "—";
+    const tp = m.take_profit != null ? m.take_profit : "—";
+    const sl = m.stop_loss != null ? m.stop_loss : "—";
+    return `<div class="pm ${m.tone}">` +
+      `<div class="pm-top"><span class="pm-name">${m.name}</span>` +
+      `<span class="pm-horizon">${m.horizon}</span>` +
+      `<span class="pm-action ${m.tone}">${m.action}</span></div>` +
+      `<div class="pm-levels">` +
+      `<span class="pm-lv buy"><i>买入区</i>${zone}</span>` +
+      `<span class="pm-lv tp"><i>止盈</i>${tp}</span>` +
+      `<span class="pm-lv sl"><i>止损</i>${sl}</span></div>` +
+      `<div class="pm-reason">${m.reason}</div></div>`;
+  }).join("");
+  $("plan-disclaimer").textContent = plan.disclaimer || "";
+}
+
+async function loadPlan(code) {
+  const wrap = $("plan-masters");
+  if (!cacheGet("plan:" + code)) {
+    $("plan-stance").innerHTML = "";
+    $("plan-levels").innerHTML = "";
+    wrap.innerHTML = skeleton(4, "plan-skel");
+  }
+  try {
+    await swr("plan:" + code, `/api/stock/${code}/plan?days=160`, (d) => {
+      if (currentCode === code) renderPlan(d);
+    });
+  } catch (e) {
+    wrap.innerHTML = `<span class="funda-empty">操作建议加载失败：${e.message}</span>`;
   }
 }
 

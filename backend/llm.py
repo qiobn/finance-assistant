@@ -260,8 +260,34 @@ def _valuation_text(funda: dict | None) -> str:
     return "估值/资金：" + "；".join(bits) if bits else ""
 
 
-def build_messages(stock: dict, funda: dict | None = None) -> list[dict]:
-    """把行情/指标/多周期趋势/估值分位打包成给 LLM 的中文提示（含投资大师透镜 + 情景化前瞻）。"""
+_PREF_GUIDE = {
+    "short": ("短线收益（数周内）",
+              "以【趋势跟随】【超跌反弹】和动量为主，价位要贴近现价、止盈止损都要紧；"
+              "估值/成长仅作背景。强调择时与纪律：买点、第一止盈、止损三个价位必须明确。"),
+    "long": ("长期持有（数月至数年）",
+             "以【价值/逆向】【成长匹配】和估值分位为主，淡化短期波动；"
+             "强调分批建仓区间、长期持有的加仓/减仓条件，止损放宽，不被日线噪音震出。"),
+    "balanced": ("均衡",
+                 "兼顾趋势择时与估值安全边际，给出适合中线的买入区间与止盈止损。"),
+}
+
+
+def _plan_text(plan: dict | None, pref: str) -> str:
+    if not plan:
+        return ""
+    try:
+        from .strategies import plan_text
+        return plan_text(plan, pref)
+    except Exception:
+        return ""
+
+
+def build_messages(stock: dict, funda: dict | None = None,
+                   plan: dict | None = None, pref: str = "balanced") -> list[dict]:
+    """把行情/指标/多周期趋势/估值分位/大师买卖纪律打包成给 LLM 的中文提示。
+
+    pref：short=短线收益 / long=长期持有 / balanced=均衡，影响大师视角与价位侧重。
+    """
     q = stock["quote"]
     a = stock["analysis"]
     k = stock["kline"]
@@ -273,27 +299,31 @@ def build_messages(stock: dict, funda: dict | None = None) -> list[dict]:
         "RSI12": k["rsi12"][-1],
         "布林上轨": k["boll_upper"][-1], "布林下轨": k["boll_lower"][-1],
     }
+    pref_name, pref_rule = _PREF_GUIDE.get(pref, _PREF_GUIDE["balanced"])
     system = (
-        "你是一名严谨、客观的 A 股投研助手，面向新手用通俗中文解读。"
+        "你是一名严谨、客观的 A 股投研助手，擅长用投资大师的纪律给出『买卖位置与条件』，面向新手用通俗中文。"
         "请只基于下方提供的数据，不要编造数字；技术指标有滞后性、数据为日线级别非实时。\n"
+        f"用户偏好：{pref_name}。{pref_rule}\n"
+        "下方『大师买卖纪律』已由规则引擎算好具体价位，请直接采用这些数字，必要时解释为什么。\n"
+        "你不能预测『几月几号买』，只能给『在什么位置、满足什么条件就买/卖』。\n"
         "输出结构：\n"
-        "1) 一句话总体判断；\n"
-        "2) 『趋势(含多周期是否共振) / 动量 / 量价 / 估值 / 风险』分点说明，明确指出指标间的矛盾；\n"
-        "3) 投资大师透镜：分别用【价值派(格雷厄姆/巴菲特：安全边际、估值分位、是否便宜)】、"
-        "【成长派(彼得林奇：成长与估值是否匹配、PEG 思路)】、【趋势派(顺势：多周期方向是否一致)】"
-        "三个视角各给 1-2 句看法（数据不足就直说不足，不要硬编）；\n"
-        "4) 情景化前瞻：分『偏多情景』与『偏空情景』，各自说明【需要满足什么条件/关键价位】才成立，"
-        "而不是断言一定涨跌；\n"
-        "5) 风险提示：强调这不是投资建议、指标滞后、应先用模拟盘或小资金验证。\n"
+        "1) 一句话总体判断（结合用户偏好）；\n"
+        "2) 投资大师怎么看：【价值/逆向(格雷厄姆·巴菲特)】【成长(彼得林奇·PEG)】【趋势(顺势)】"
+        "【超跌反弹(短线)】各 1-2 句，数据不足就直说；\n"
+        "3) 【操作计划】用要点给出：① 买入区间/触发条件 ② 第一止盈位/减仓条件 ③ 止损位 "
+        "（直接引用下方算好的价位，按用户偏好排序侧重）；\n"
+        "4) 情景化前瞻：分『偏多情景』『偏空情景』，各说明需要满足什么条件/突破或跌破哪个价位才成立；\n"
+        "5) 风险提示：强调这不是投资建议、指标滞后、便宜可能更便宜/趋势可能反转、应带止损并先用模拟盘验证。\n"
         "不要给出『一定涨/一定跌』『满仓/梭哈』之类的话。"
     )
-    extra = "\n".join(x for x in (_trends_text(stock), _valuation_text(funda)) if x)
+    extra = "\n".join(x for x in (_trends_text(stock), _valuation_text(funda),
+                                  _plan_text(plan, pref)) if x)
     user = (
         f"股票：{stock['name']}（{stock['code']}）\n"
         f"最新数据：{json.dumps(latest, ensure_ascii=False)}\n"
         f"{extra}\n\n"
         f"规则引擎给出的综合判断：{a['verdict']}\n"
         f"各维度信号：\n{signals_text}\n\n"
-        "请基于以上数据，按上述结构给出中文深度点评与情景化前瞻。"
+        "请基于以上数据，按上述结构给出中文深度点评、可执行的买卖计划与情景化前瞻。"
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]

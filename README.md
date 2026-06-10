@@ -13,7 +13,21 @@
 - **自选总览**：把自选股列成「体检表」，一眼看涨跌与看多/看空/警示信号数量。
 - **选股扫描**：按规则（均线多头、MACD 金叉、RSI 超买超卖、放量、逼近布林下轨）筛股；范围支持**自选股 / 上证50 / 沪深300**；结果**流式输出**（边扫边出 + 进度）。
 - **AI 问答**：用大白话提问，系统自动识别问题里的股票并带上真实指标交给你的 LLM 作答。
-- **AI 深度点评**：接入 OpenAI 兼容大模型，对个股流式生成结构化点评；支持保存多套 API 配置并随时切换。
+- **AI 深度点评**：接入 OpenAI 兼容大模型，对个股流式生成结构化点评；支持保存多套 API 配置并随时切换。可选**投资偏好（短线收益 / 长期持有 / 均衡）**，模型据此给出不同侧重的买卖计划。
+- **操作建议（投资大师 Skills）**：把四位大师的纪律规则化，给出**具体价位**——买入区间 / 止盈位 / 止损位 + 当前该做什么 + 依据，并汇总「总体倾向」。
+
+## 投资大师 Skills（买卖纪律）
+
+大师不预测「几月几号买」，而是给「在什么位置、满足什么条件就买/卖」。本项目把这套纪律规则化，用现有日线指标 + 近五年估值分位算出**可执行的参考价位**：
+
+| Skill（风格） | 何时买（条件 + 买入区） | 何处卖（止盈） | 止损 |
+|---|---|---|---|
+| **趋势跟随**（顺势派） | 周/月线向上 + 回踩 MA20 附近（±3%） | 跌破 MA20 / RSI 超买贴上轨减仓 | 破 MA60 或 −8% |
+| **价值/逆向**（格雷厄姆·巴菲特） | PE/PB 近五年分位 < 30% → 分批买 | 分位回到 70%+（贵区） | −15%（更宽） |
+| **超跌反弹**（短线） | RSI < 30 且贴布林下轨 | 反弹到中轨 / MA20 | 破近期低点 −4%（严） |
+| **成长匹配**（彼得林奇·PEG） | PEG < 1 且成长 > 0 | PEG > 1.5 或成长转负 | −10% |
+
+> ⚠️ 这些是**规则化研究信号**，不是投资建议，更不是「保证买卖点」。便宜可能更便宜、趋势可能反转——每个 Skill 都带止损，请控制仓位、先用模拟盘验证。
 
 ## 数据实时性说明
 
@@ -72,8 +86,9 @@ backend/
   data.py         akshare 取数：先读 SQLite → 仅增量补缺失区间 → 回退演示数据
   db.py           SQLite 持久层（K线/基本面落盘，WAL；保留窗口 + LRU 清理）
   indicators.py   MA / MACD / RSI / 布林带 / KDJ
-  analysis.py     规则化人话信号与风险提示
-  llm.py          OpenAI 兼容 LLM 客户端（多档配置、流式输出）
+  analysis.py     规则化人话信号与风险提示（含多周期趋势）
+  strategies.py   投资大师 Skills：买入区/止盈/止损/总体倾向（规则引擎）
+  llm.py          OpenAI 兼容 LLM 客户端（多档配置、流式输出、投资偏好）
   storage.py      自选股 JSON 存储
 frontend/
   index.html / styles.css / app.js   交互式看板（ECharts；SWR 客户端缓存 + 骨架屏）
@@ -98,6 +113,7 @@ data/                                （自动生成，已被 .gitignore 忽略�
 | GET | `/api/search?q=` | 按代码/名称搜索 |
 | GET | `/api/stock/{code}?days=160` | K线 + 指标 + 分析 |
 | GET | `/api/stock/{code}/fundamentals` | 估值 + 财务摘要 + 资金流 |
+| GET | `/api/stock/{code}/plan` | 投资大师操作建议（买入区/止盈/止损/总体倾向） |
 | GET | `/api/watchlist`、POST/DELETE `/api/watchlist/{code}` | 自选股读取/增删 |
 | GET | `/api/market` | 大盘指数 + 全市场涨跌家数 |
 | GET | `/api/overview` | 自选股总览（信号汇总） |
@@ -110,8 +126,8 @@ data/                                （自动生成，已被 .gitignore 忽略�
 | POST | `/api/llm/profiles` | 新增/编辑接入档（含 id 则编辑） |
 | DELETE | `/api/llm/profiles/{id}` | 删除某接入档 |
 | POST | `/api/llm/active` | 切换当前使用的接入档 |
-| POST | `/api/stock/{code}/ai` | 用你的 LLM 生成深度点评 |
-| POST | `/api/stock/{code}/ai/stream` | 流式生成点评 |
+| POST | `/api/stock/{code}/ai?pref=` | 用你的 LLM 生成深度点评（pref: short/long/balanced） |
+| POST | `/api/stock/{code}/ai/stream?pref=` | 流式生成点评（含大师买卖计划） |
 
 ## 下一步可扩展
 
