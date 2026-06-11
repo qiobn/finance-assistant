@@ -360,6 +360,78 @@ def _extract_stocks(question: str, limit: int = 3) -> list[str]:
     return out[:limit]
 
 
+_CONTEXT_LABELS = {"market": "大盘总览", "watchlist": "自选股技术面", "intel": "情报快讯"}
+
+
+def _ctx_market() -> str:
+    mk = data.get_index_overview()
+    idx = "；".join(
+        f"{i['name']} {i['price']}（{i['pct']:+.2f}%）" for i in (mk.get("indices") or [])
+    )
+    b = mk.get("breadth") or {}
+    breadth = ""
+    if b.get("up") is not None:
+        breadth = f"；全市场涨跌家数 涨{b.get('up')}/跌{b.get('down')}，涨停{b.get('limit_up')}/跌停{b.get('limit_down')}"
+    return (idx + breadth) if idx else ""
+
+
+def _ctx_watchlist() -> str:
+    codes = storage.load()
+    if not codes:
+        return "（自选股为空）"
+    items = list(_EXEC.map(_safe_compact, codes))
+    lines = []
+    for c in items:
+        if c.get("error"):
+            continue
+        lines.append(f"{c['name']}({c['code']}) 收盘{c.get('close')}（{c.get('pct')}%）综合判断：{c.get('verdict')}")
+    return "；".join(lines)
+
+
+def _ctx_intel() -> str:
+    parts = []
+    try:
+        sec = intel.get_sector_board("industry")
+        lead = "、".join(f"{s['name']}({s['pct']:+.2f}%)" for s in (sec.get("leaders") or [])[:6])
+        lag = "、".join(f"{s['name']}({s['pct']:+.2f}%)" for s in (sec.get("laggards") or [])[:4])
+        if lead:
+            parts.append(f"板块领涨：{lead}")
+        if lag:
+            parts.append(f"板块领跌：{lag}")
+    except Exception:
+        pass
+    try:
+        news = intel.get_global_news(30)
+        rows = []
+        for n in (news.get("items") or [])[:12]:
+            sent = n.get("sentiment")
+            tag = f"[{sent}]" if sent and sent != "中性" else ""
+            rows.append(f"{tag}{n.get('title', '')}")
+        if rows:
+            parts.append("近期快讯：" + "；".join(rows))
+    except Exception:
+        pass
+    return "\n".join(parts)
+
+
+_CTX_BUILDERS = {"market": _ctx_market, "watchlist": _ctx_watchlist, "intel": _ctx_intel}
+
+
+def _build_context_blocks(sources: list) -> list[dict]:
+    blocks = []
+    for src in sources or []:
+        fn = _CTX_BUILDERS.get(src)
+        if not fn:
+            continue
+        try:
+            text = (fn() or "").strip()
+        except Exception:
+            text = ""
+        if text:
+            blocks.append({"label": _CONTEXT_LABELS.get(src, src), "text": text})
+    return blocks
+
+
 @app.post("/api/chat")
 def chat(payload: dict = Body(...)) -> dict:
     question = (payload.get("question") or "").strip()
@@ -372,11 +444,16 @@ def chat(payload: dict = Body(...)) -> dict:
             contexts.append(_build_stock_payload(code, 120, "qfq"))
         except Exception:
             continue
+    extras = _build_context_blocks(payload.get("sources") or [])
     try:
-        text = llm.chat(llm.build_chat_messages(question, contexts))
+        text = llm.chat(llm.build_chat_messages(question, contexts, extras))
     except llm.LLMError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {"text": text, "used": [{"code": c["code"], "name": c["name"]} for c in contexts]}
+    return {
+        "text": text,
+        "used": [{"code": c["code"], "name": c["name"]} for c in contexts],
+        "sources_used": [b["label"] for b in extras],
+    }
 
 
 # ---- LLM 接入：多档配置管理 + 切换 ----

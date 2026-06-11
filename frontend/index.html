@@ -191,6 +191,13 @@
           <span class="chat-hint">基于真实指标作答，可问「比较茅台和宁德时代」「000001 现在技术面如何」</span>
         </div>
         <div id="chat-log" class="chat-log"></div>
+        <div class="chat-ctx">
+          <span class="chat-ctx-label">引入上下文：</span>
+          <button class="ctx-chip" data-src="market" type="button">📈 大盘总览</button>
+          <button class="ctx-chip" data-src="watchlist" type="button">📌 自选股技术面</button>
+          <button class="ctx-chip" data-src="intel" type="button">🧠 情报快讯</button>
+          <span class="chat-ctx-hint">勾选后随本次提问一并发给 AI（会增加少量 token）</span>
+        </div>
         <div class="chat-input">
           <input id="chat-text" type="text" placeholder="输入你的问题，回车发送…" autocomplete="off" />
           <button id="chat-send" class="ai-btn">发送</button>

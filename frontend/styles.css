@@ -233,6 +233,15 @@ body {
 .chat-msg.user { align-self: flex-end; background: var(--accent); color: #fff; }
 .chat-msg.bot { align-self: flex-start; background: var(--bg-elev); border: 1px solid var(--border); }
 .chat-msg .used { display: block; margin-top: 8px; font-size: 11px; color: var(--text-faint); }
+.chat-ctx { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 0 4px; }
+.chat-ctx-label { font-size: 12px; color: var(--text-dim); }
+.chat-ctx-hint { font-size: 11px; color: var(--text-faint); }
+.ctx-chip {
+  background: var(--bg-elev); border: 1px solid var(--border); color: var(--text-dim);
+  border-radius: 999px; padding: 4px 11px; font-size: 12px; cursor: pointer; transition: all .15s;
+}
+.ctx-chip:hover { border-color: var(--accent); color: var(--text); }
+.ctx-chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .chat-input { display: flex; gap: 10px; position: sticky; bottom: 0; padding-top: 8px; background: var(--bg); }
 .chat-input input { flex: 1; padding: 11px 13px; border-radius: 8px; background: var(--bg-elev); border: 1px solid var(--border); color: var(--text); font-size: 14px; outline: none; }
 .chat-input input:focus { border-color: var(--accent); }
