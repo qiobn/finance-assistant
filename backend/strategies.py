@@ -9,6 +9,8 @@
 """
 from __future__ import annotations
 
+import statistics
+
 import pandas as pd
 
 from . import valuation
@@ -37,6 +39,10 @@ def _last(df: pd.DataFrame, col: str) -> float | None:
 
 def _round(x: float | None, n: int = 2) -> float | None:
     return None if x is None else round(float(x), n)
+
+
+def _clamp(x: float, lo: float = 0, hi: float = 100) -> float:
+    return max(lo, min(hi, x))
 
 
 def _zone(lo: float | None, hi: float | None) -> list | None:
@@ -99,13 +105,16 @@ def _trend_master(df: pd.DataFrame, trends: dict, lv: dict) -> dict:
     down_big = (wk == "bearish") and (mo == "bearish")
 
     base = {"key": "trend", "name": "趋势跟随（顺势派）", "horizon": "中短线"}
+    # 置信度：周/月同向 → 高；只有其一 → 中；都缺 → 低
+    agree = wk is not None and wk == mo
+    conf = 78 if agree else (58 if (wk or mo) else 38)
     if down_big or (wk == "bearish" and mo != "bullish"):
         return {**base, "action": "回避 / 不逆势抄底", "tone": "bearish",
-                "buy_zone": None, "take_profit": None, "stop_loss": None,
+                "score": 20, "confidence": conf, "buy_zone": None, "take_profit": None, "stop_loss": None,
                 "reason": "周/月线大方向向下，顺势纪律是不买、空仓等右侧信号；逆势抄底胜率低。"}
     if not up_big:
         return {**base, "action": "观望（趋势未确认）", "tone": "neutral",
-                "buy_zone": None, "take_profit": None, "stop_loss": None,
+                "score": 48, "confidence": 38, "buy_zone": None, "take_profit": None, "stop_loss": None,
                 "reason": "周/月线方向不明，等大级别转多或日线放量突破再跟。"}
 
     buy_zone = _zone(ma20 * 0.97, ma20 * 1.03) if ma20 else None
@@ -113,22 +122,26 @@ def _trend_master(df: pd.DataFrame, trends: dict, lv: dict) -> dict:
     stop = _round(min(x for x in (ma60, close * 0.92 if close else None) if x is not None)) \
         if (ma60 or close) else None
     if rsi is not None and rsi >= 75:
-        action, tone = "减仓 / 不追高", "warning"
+        action, tone, score = "减仓 / 不追高", "warning", 46
         reason = (f"大方向向上但 RSI={rsi:.0f} 超买、贴近上轨，"
                   f"顺势者在此减仓锁利，等回踩 MA20({ma20}) 再接。")
     elif close and ma20 and abs(close / ma20 - 1) <= 0.03:
-        action, tone = "逢回踩分批买入", "bullish"
+        action, tone, score = "逢回踩分批买入", "bullish", 80
         reason = (f"周/月线向上，价回踩到 MA20({ma20}) 附近企稳，是顺势买点；"
                   f"买入区≈{buy_zone}，跌破 MA60({ma60}) 或 −8% 离场。")
     elif close and ma20 and close > ma20 * 1.03:
-        action, tone = "持有 / 等回踩", "neutral"
+        action, tone, score = "持有 / 等回踩", "neutral", 60
         reason = (f"趋势向上但已偏离 MA20({ma20})，追高性价比低；"
                   f"持有者拿住，新仓等回踩到 {buy_zone} 再进。")
     else:
-        action, tone = "趋势偏多，控制仓位", "bullish"
+        action, tone, score = "趋势偏多，控制仓位", "bullish", 70
         reason = f"大方向向上，{('MACD金叉、' if macd == 'golden' else '')}回踩 MA20({ma20}) 是相对安全的买点。"
-    return {**base, "action": action, "tone": tone, "buy_zone": buy_zone,
-            "take_profit": take_profit, "stop_loss": stop, "reason": reason}
+    if macd == "golden":
+        score = _clamp(score + 4)
+    elif macd == "below":
+        score = _clamp(score - 4)
+    return {**base, "action": action, "tone": tone, "score": round(score), "confidence": conf,
+            "buy_zone": buy_zone, "take_profit": take_profit, "stop_loss": stop, "reason": reason}
 
 
 def _value_master(df: pd.DataFrame, funda: dict | None, lv: dict, val: dict | None = None) -> dict:
@@ -142,27 +155,38 @@ def _value_master(df: pd.DataFrame, funda: dict | None, lv: dict, val: dict | No
     vtext = valuation.short_text(val)
     mos = _f((val or {}).get("mos"))          # 安全边际%（正=低估）
     verdict = (val or {}).get("verdict")
+    n_methods = len((val or {}).get("methods") or [])
 
     # 估值分位缺失时，用多法合理价的安全边际兜底判断
     if not pcts:
         if mos is not None:
+            score = round(_clamp(50 + mos * 1.4))      # +20%→78、-15%→29
+            conf = round(_clamp(45 + n_methods * 7))    # 方法越多越可信
             if verdict == "低估":
                 return {**base, "action": "多法估值低估，可分批", "tone": "bullish",
+                        "score": score, "confidence": conf,
                         "buy_zone": _zone(recent_low, close), "take_profit": None,
                         "stop_loss": _round(close * 0.85) if close else None,
                         "reason": f"无分位数据，但{vtext}有安全边际，价值派可分批买、基本面恶化才离场。"}
             if verdict == "高估":
                 return {**base, "action": "多法估值偏高，不买", "tone": "bearish",
+                        "score": score, "confidence": conf,
                         "buy_zone": None, "take_profit": None, "stop_loss": None,
                         "reason": f"无分位数据；{vtext}缺乏安全边际，价值派此时不追。"}
             return {**base, "action": "估值中性，耐心等", "tone": "neutral",
+                    "score": score, "confidence": round(_clamp(conf - 10)),
                     "buy_zone": None, "take_profit": None, "stop_loss": None,
                     "reason": f"{vtext}估值不便宜也不贵，价值派等更明显的低估。"}
-        return {**base, "action": "数据不足", "tone": "neutral", "buy_zone": None,
-                "take_profit": None, "stop_loss": None,
+        return {**base, "action": "数据不足", "tone": "neutral", "score": 50, "confidence": 12,
+                "buy_zone": None, "take_profit": None, "stop_loss": None,
                 "reason": "暂无近五年 PE/PB 分位与估值数据，价值视角无法判断（亏损股估值也会失真）。"}
 
     low = min(pcts)
+    # 评分：分位越低越便宜分越高，与多法安全边际融合
+    score_pct = 100 - low
+    score = round(_clamp(0.6 * score_pct + 0.4 * _clamp(50 + mos * 1.4)) if mos is not None else score_pct)
+    # 置信度：分位双指标齐全、估值方法多、信号越极端越可信
+    conf = round(_clamp(58 + (10 if len(pcts) == 2 else 0) + min(n_methods, 4) * 4 + abs(score - 50) * 0.2))
     tag = " / ".join(filter(None, [
         f"PE分位{pe_pct:.0f}%" if pe_pct is not None else None,
         f"PB分位{pb_pct:.0f}%" if pb_pct is not None else None,
@@ -170,28 +194,31 @@ def _value_master(df: pd.DataFrame, funda: dict | None, lv: dict, val: dict | No
     suffix = (" " + vtext) if vtext else ""
     if low <= 20:
         return {**base, "action": "估值很便宜，积极分批", "tone": "bullish",
+                "score": score, "confidence": conf,
                 "buy_zone": _zone(recent_low, close), "take_profit": None,
                 "stop_loss": _round(close * 0.85) if close else None,
                 "reason": (f"{tag}，处于近五年低位区（安全边际较好）。价值派分批买、越跌越买；"
                            f"估值修复到贵区(>70%分位)再考虑减；止损放宽到约 −15%。" + suffix)}
     if low <= 30:
         return {**base, "action": "偏便宜，可小批建仓", "tone": "bullish",
+                "score": score, "confidence": conf,
                 "buy_zone": _zone(recent_low, close), "take_profit": None,
                 "stop_loss": _round(close * 0.85) if close else None,
                 "reason": f"{tag}，估值偏低。可小批建仓，留子弹等更低；分位回到 70%+ 时分批减。" + suffix}
     if low >= 70:
-        # 高分位 + 多法高估 → 更明确看空
         word = "（多法亦显示高估）" if verdict == "高估" else ""
         return {**base, "action": "估值偏贵，不买 / 可减", "tone": "bearish",
+                "score": score, "confidence": conf,
                 "buy_zone": None, "take_profit": None, "stop_loss": None,
                 "reason": f"{tag}，处于近五年高位区{word}，缺乏安全边际；价值派不追，持仓者考虑分批兑现。" + suffix}
-    # 中间分位：若多法明确低估，则上调为可小批
     if verdict == "低估":
         return {**base, "action": "分位中性但多法低估，可小批", "tone": "bullish",
+                "score": score, "confidence": round(_clamp(conf - 8)),
                 "buy_zone": _zone(recent_low, close), "take_profit": None,
                 "stop_loss": _round(close * 0.85) if close else None,
                 "reason": f"{tag}（分位中性），但{vtext}有安全边际，价值派可小批参与。"}
     return {**base, "action": "估值中性，耐心等", "tone": "neutral",
+            "score": score, "confidence": round(_clamp(conf - 8)),
             "buy_zone": None, "take_profit": None, "stop_loss": None,
             "reason": f"{tag}，估值不算便宜也不算贵；价值派偏好等更明显的低估再出手。" + suffix}
 
@@ -206,7 +233,11 @@ def _rebound_master(df: pd.DataFrame, lv: dict) -> dict:
         buy_zone = _zone(bl * 0.98, bl * 1.03) if bl else None
         tp = _round(bmid if bmid else ma20)
         stop = _round(lv["recent_low"] * 0.96) if lv["recent_low"] else None
+        # RSI 越低、越贴下轨，反弹博弈分越高；但本就是短线高风险，置信度封顶中等
+        score = round(_clamp(62 + (30 - rsi)))
+        conf = round(_clamp(50 + (30 - rsi) * 1.2))
         return {**base, "action": "博反弹（小仓位）", "tone": "bullish",
+                "score": score, "confidence": conf,
                 "buy_zone": buy_zone, "take_profit": tp, "stop_loss": stop,
                 "reason": (f"RSI={rsi:.0f} 超卖且贴近布林下轨({bl})，有超跌反弹机会；"
                            f"目标看中轨/MA20({tp})，跌破近期低点约 −4% 必须止损。高风险、仓位要小。")}
@@ -215,8 +246,8 @@ def _rebound_master(df: pd.DataFrame, lv: dict) -> dict:
         why.append(f"RSI={rsi:.0f}{'（未超卖）' if rsi > 30 else ''}")
     if not near_lower:
         why.append("未贴近布林下轨")
-    return {**base, "action": "未触发", "tone": "neutral", "buy_zone": None,
-            "take_profit": None, "stop_loss": None,
+    return {**base, "action": "未触发", "tone": "neutral", "score": 50, "confidence": 30,
+            "buy_zone": None, "take_profit": None, "stop_loss": None,
             "reason": "当前不在超跌区（" + "，".join(why or ["条件不足"]) + "），无反弹买点。"}
 
 
@@ -232,27 +263,33 @@ def _growth_master(df: pd.DataFrame, funda: dict | None, lv: dict) -> dict:
             growth = g
             break
     if pe is None or growth is None:
-        return {**base, "action": "数据不足", "tone": "neutral", "buy_zone": None,
-                "take_profit": None, "stop_loss": None,
+        return {**base, "action": "数据不足", "tone": "neutral", "score": 50, "confidence": 12,
+                "buy_zone": None, "take_profit": None, "stop_loss": None,
                 "reason": "缺少 PE 或净利润增速，PEG 无法计算（成长股数据常有缺失）。"}
     if growth <= 0:
-        return {**base, "action": "成长转负，不买", "tone": "bearish",
+        return {**base, "action": "成长转负，不买", "tone": "bearish", "score": 24, "confidence": 70,
                 "buy_zone": None, "take_profit": None, "stop_loss": None,
                 "reason": f"最新净利润同比 {growth:.0f}%（负增长），林奇式成长逻辑不成立。"}
     peg = pe / growth
+    # PEG 越低分越高：0.5→~85、1.0→~62、1.5→~45、2+→低
+    score = round(_clamp(110 - peg * 48))
+    conf = round(_clamp(60 + abs(score - 50) * 0.3))
     ma20, close = lv["ma20"], lv["close"]
     buy_zone = _zone(ma20 * 0.97, ma20 * 1.03) if ma20 else None
     stop = _round(close * 0.9) if close else None
     if peg < 1:
         return {**base, "action": "成长与估值匹配，可买", "tone": "bullish",
+                "score": score, "confidence": conf,
                 "buy_zone": buy_zone, "take_profit": None, "stop_loss": stop,
                 "reason": (f"PE={pe:.0f}、净利增速 {growth:.0f}% → PEG≈{peg:.2f}(<1) 偏低，"
                            f"成长性价比好；回踩 MA20 分批，PEG>1.5 或成长转负再减，止损约 −10%。")}
     if peg <= 1.5:
         return {**base, "action": "估值合理，持有为主", "tone": "neutral",
+                "score": score, "confidence": conf,
                 "buy_zone": buy_zone, "take_profit": None, "stop_loss": stop,
                 "reason": f"PEG≈{peg:.2f} 处于合理区，性价比一般；持有者拿住，新仓等回调。"}
     return {**base, "action": "成长跟不上估值，偏贵", "tone": "bearish",
+            "score": score, "confidence": conf,
             "buy_zone": None, "take_profit": None, "stop_loss": None,
             "reason": f"PE={pe:.0f}、增速 {growth:.0f}% → PEG≈{peg:.2f}(>1.5) 偏贵，林奇会等回调。"}
 
@@ -288,12 +325,25 @@ def _quality_master(df: pd.DataFrame, funda: dict | None, lv: dict, val: dict | 
     margin = _latest_fin(funda, "销售毛利率")
     debt = _latest_fin(funda, "资产负债率")
     if roe is None and margin is None:
-        return {**base, "action": "数据不足", "tone": "neutral", "buy_zone": None,
-                "take_profit": None, "stop_loss": None,
+        return {**base, "action": "数据不足", "tone": "neutral", "score": 50, "confidence": 12,
+                "buy_zone": None, "take_profit": None, "stop_loss": None,
                 "reason": "缺少 ROE/毛利率等质量指标，无法判断是不是『好生意』。"}
     v = (funda or {}).get("valuation") or {}
     pcts = [p for p in (_f(v.get("pe_ttm_pct")), _f(v.get("pb_pct"))) if p is not None]
     val_pct = min(pcts) if pcts else None
+    # 质量分：ROE/毛利/负债各项打分，再按估值高低小幅调整
+    q = 50.0
+    if roe is not None:
+        q += _clamp((roe - 12) * 2.2, -24, 26)
+    if margin is not None:
+        q += _clamp((margin - 25) * 0.5, -12, 14)
+    if debt is not None:
+        q += _clamp((55 - debt) * 0.25, -12, 10)
+    if val_pct is not None:
+        q += _clamp((50 - val_pct) * 0.2, -10, 10)   # 越便宜略加分
+    q_score = round(_clamp(q))
+    n_q = sum(x is not None for x in (roe, margin, debt))
+    q_conf = round(_clamp(50 + n_q * 8 + (8 if val_pct is not None else 0)))
     bits = " / ".join(filter(None, [
         f"ROE {roe:.1f}%" if roe is not None else None,
         f"毛利 {margin:.0f}%" if margin is not None else None,
@@ -314,6 +364,7 @@ def _quality_master(df: pd.DataFrame, funda: dict | None, lv: dict, val: dict | 
         if debt is not None and debt > 65:
             weak.append("负债偏高")
         return {**base, "action": "生意质量一般，不碰", "tone": "bearish",
+                "score": min(q_score, 42), "confidence": q_conf,
                 "buy_zone": None, "take_profit": None, "stop_loss": None,
                 "reason": f"{bits}：{('、'.join(weak)) or '质量不达标'}。芒格只买伟大的生意，宁可错过不将就。"}
     vtext = valuation.short_text(val)
@@ -321,12 +372,14 @@ def _quality_master(df: pd.DataFrame, funda: dict | None, lv: dict, val: dict | 
     rich = (val_pct is not None and val_pct >= 70) or verdict == "高估"
     if rich:
         return {**base, "action": "好生意但偏贵，等回调", "tone": "neutral",
+                "score": min(q_score, 58), "confidence": q_conf,
                 "buy_zone": None, "take_profit": None, "stop_loss": None,
                 "reason": (f"{bits}，确是好生意；但当前估值偏贵（"
                            + (f"近五年 {val_pct:.0f}% 分位" if val_pct is not None else "")
                            + "），合理价才出手，耐心等回调。" + (" " + vtext if vtext else ""))}
     quality_word = "卓越" if strong else "稳健"
     return {**base, "action": "好生意+价格合理，可买/持有", "tone": "bullish",
+            "score": max(q_score, 62), "confidence": q_conf,
             "buy_zone": buy_zone, "take_profit": None, "stop_loss": stop,
             "reason": (f"{bits}，{quality_word}的生意"
                        + (f"，估值近五年 {val_pct:.0f}% 分位不贵" if val_pct is not None else "")
@@ -340,10 +393,13 @@ def _wood_master(df: pd.DataFrame, funda: dict | None, lv: dict) -> dict:
     rev_g = _latest_fin(funda, "营业总收入同比增长率")
     np_g = _latest_fin(funda, "净利润同比增长率")
     if rev_g is None and np_g is None:
-        return {**base, "action": "数据不足", "tone": "neutral", "buy_zone": None,
-                "take_profit": None, "stop_loss": None,
+        return {**base, "action": "数据不足", "tone": "neutral", "score": 50, "confidence": 12,
+                "buy_zone": None, "take_profit": None, "stop_loss": None,
                 "reason": "缺少营收/净利增速，无法判断成长爆发力。"}
     g = rev_g if rev_g is not None else np_g
+    # 增速越高分越高：0%→~40、25%→~72、50%→~90
+    score = round(_clamp(40 + g * 1.0))
+    conf = round(_clamp(52 + (10 if (rev_g is not None and np_g is not None) else 0) + abs(score - 50) * 0.2))
     bits = " / ".join(filter(None, [
         f"营收增速 {rev_g:.0f}%" if rev_g is not None else None,
         f"净利增速 {np_g:.0f}%" if np_g is not None else None,
@@ -353,14 +409,17 @@ def _wood_master(df: pd.DataFrame, funda: dict | None, lv: dict) -> dict:
     stop = _round(close * 0.82) if close else None  # 高成长波动大，止损放宽
     if g >= 25:
         return {**base, "action": "高成长，看长做多", "tone": "bullish",
+                "score": score, "confidence": conf,
                 "buy_zone": buy_zone, "take_profit": None, "stop_loss": stop,
                 "reason": (f"{bits}，处于高速增长期。伍德重赛道与成长斜率、容忍阶段性高估值，"
                            f"回调即分批、拿长线；但成长一旦转负要果断退出（止损放宽到约 −18%）。")}
     if g <= 0:
         return {**base, "action": "成长熄火，退出", "tone": "bearish",
+                "score": score, "confidence": conf,
                 "buy_zone": None, "take_profit": None, "stop_loss": None,
                 "reason": f"{bits}（零或负增长），颠覆成长逻辑不成立，伍德式策略不参与。"}
     return {**base, "action": "成长平庸，吸引力不足", "tone": "neutral",
+            "score": score, "confidence": round(_clamp(conf - 8)),
             "buy_zone": None, "take_profit": None, "stop_loss": None,
             "reason": f"{bits}，增速不够亮眼；伍德偏好爆发式成长，此处性价比一般。"}
 
@@ -371,8 +430,9 @@ def _risk_master(df: pd.DataFrame, lv: dict) -> dict:
     close = df["close"].astype(float)
     rets = close.pct_change().dropna().tail(120)
     if len(rets) < 20:
-        return {**base, "action": "数据不足", "tone": "neutral", "buy_zone": None,
-                "take_profit": None, "stop_loss": None, "reason": "样本不足，无法评估波动与回撤。"}
+        return {**base, "action": "数据不足", "tone": "neutral", "score": None, "confidence": 15,
+                "buy_zone": None, "take_profit": None, "stop_loss": None,
+                "reason": "样本不足，无法评估波动与回撤。"}
     ann_vol = float(rets.std() * (244 ** 0.5) * 100)
     win = close.tail(120)
     max_dd = float((win / win.cummax() - 1).min() * 100)
@@ -396,6 +456,7 @@ def _risk_master(df: pd.DataFrame, lv: dict) -> dict:
     rr_text = (f"盈亏比≈{rr}（{'不对称占优，值得下注' if rr and rr >= 2 else '一般/偏差，谨慎'}）；"
                if rr is not None else "")
     return {**base, "action": f"建议单票仓位 {pos}", "tone": tone,
+            "score": None, "confidence": round(_clamp(60 + min(len(rets), 120) * 0.2)),
             "buy_zone": None, "take_profit": None, "stop_loss": None,
             "reason": (f"年化波动率≈{ann_vol:.0f}%、近120日最大回撤≈{max_dd:.0f}%。{rr_text}"
                        f"塔勒布只在『亏损有限、盈利可观』时下注：务必先定止损，再按上限建议控制仓位，"
@@ -403,26 +464,39 @@ def _risk_master(df: pd.DataFrame, lv: dict) -> dict:
 
 
 def _stance(masters: list[dict]) -> dict:
-    """综合各『方向型』大师（排除风控角色），给总体操作倾向。"""
-    skip = {"数据不足", "未触发", "观望（趋势未确认）"}
-    directional = [m for m in masters if m["key"] != "risk" and m["action"] not in skip]
+    """组合经理：对方向型大师（排除风控）按『置信度加权』汇总得分，并衡量分歧度。
+
+    加权得分 0-100（50 中性）：Σ(score×confidence)/Σconfidence；
+    分歧度 = 各大师得分的总体标准差，过大时即便均值偏多也提示降低仓位。
+    """
+    directional = [m for m in masters
+                   if m.get("key") != "risk" and m.get("score") is not None
+                   and m.get("action") != "数据不足"]
+    if not directional:
+        return {"label": "暂无足够依据，观望", "tone": "neutral",
+                "score": 50, "confidence": 0, "dispersion": 0, "buy": 0, "reduce": 0, "n": 0}
+    wsum = sum(m["confidence"] for m in directional) or 1
+    wscore = sum(m["score"] * m["confidence"] for m in directional) / wsum
+    avg_conf = wsum / len(directional)
     buy = sum(1 for m in directional if m["tone"] == "bullish")
     reduce = sum(1 for m in directional if m["tone"] == "bearish")
-    if buy >= 3 and reduce <= 1:
-        label, tone = "多位大师偏买入 / 分批", "bullish"
-    elif reduce >= 3 and buy == 0:
-        label, tone = "多位大师偏回避 / 减仓", "bearish"
-    elif buy and reduce and abs(buy - reduce) <= 1:
+    disp = statistics.pstdev([m["score"] for m in directional]) if len(directional) > 1 else 0.0
+    high_disp = disp >= 22
+
+    if wscore >= 66 and not high_disp:
+        label, tone = "委员会偏买入：多数高置信看多 / 分批", "bullish"
+    elif wscore >= 58:
+        label, tone = "偏买入：加权倾向看多，控制仓位", "bullish"
+    elif wscore <= 34 and not high_disp:
+        label, tone = "委员会偏回避：多数看空 / 空仓等右侧", "bearish"
+    elif wscore <= 42:
+        label, tone = "偏谨慎：加权倾向看空，观望 / 减仓", "bearish"
+    elif high_disp:
         label, tone = "分歧较大：买卖逻辑并存，降低仓位", "warning"
-    elif buy > reduce:
-        label, tone = "偏买入：多数逻辑成立，控制仓位", "bullish"
-    elif reduce > buy:
-        label, tone = "偏谨慎：负面逻辑居多，观望/减仓", "bearish"
-    elif not directional:
-        label, tone = "暂无明确买卖点，观望", "neutral"
     else:
-        label, tone = "以观望 / 持有为主", "neutral"
-    return {"label": label, "tone": tone, "buy": buy, "reduce": reduce}
+        label, tone = "中性：以观望 / 持有为主", "neutral"
+    return {"label": label, "tone": tone, "score": round(wscore), "confidence": round(avg_conf),
+            "dispersion": round(disp), "buy": buy, "reduce": reduce, "n": len(directional)}
 
 
 def build_plan(df: pd.DataFrame, trends: dict | None = None,
@@ -467,7 +541,11 @@ def plan_text(plan: dict, pref: str = "balanced") -> str:
         bz = f"买入区{m['buy_zone']}" if m.get("buy_zone") else "无明确买区"
         tp = f"，止盈≈{m['take_profit']}" if m.get("take_profit") is not None else ""
         sl = f"，止损≈{m['stop_loss']}" if m.get("stop_loss") is not None else ""
-        lines.append(f"- 【{m['name']}/{m['horizon']}】{m['action']}：{bz}{tp}{sl}。依据：{m['reason']}")
+        sc = f"[多空分{m['score']}/置信{m['confidence']}%]" if m.get("score") is not None else \
+            (f"[置信{m['confidence']}%]" if m.get("confidence") is not None else "")
+        lines.append(f"- 【{m['name']}/{m['horizon']}】{sc}{m['action']}：{bz}{tp}{sl}。依据：{m['reason']}")
     st = plan.get("stance") or {}
-    lines.append(f"总体倾向：{st.get('label', '')}")
-    return "大师买卖纪律（规则引擎，含具体价位）：\n" + "\n".join(lines)
+    lines.append(f"委员会（置信度加权）：{st.get('label', '')}"
+                 f"｜加权多空分 {st.get('score')}/100、平均置信 {st.get('confidence')}%、"
+                 f"分歧度 {st.get('dispersion')}（看多 {st.get('buy')}/看空 {st.get('reduce')}）。")
+    return "大师买卖纪律（规则引擎，含具体价位、多空分0-100与置信度）：\n" + "\n".join(lines)

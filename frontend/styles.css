@@ -418,6 +418,18 @@ button:disabled { cursor: not-allowed; }
 .pm-lv.buy { color: var(--bear); }
 .pm-lv.sl { color: var(--bull); }
 .pm-reason { font-size: 12px; color: var(--text-dim); line-height: 1.6; }
+
+/* 评分 + 置信度（A：多因子评分制） */
+.ps-meta { font-size: 12px; color: var(--text-dim); margin-left: 10px; }
+.ps-meta b { color: var(--text); font-size: 14px; }
+.pm-meta { display: flex; align-items: center; gap: 8px; margin: 7px 0 2px; }
+.pm-score { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 9px; background: var(--bg-elev); color: var(--text-dim); }
+.pm-score.bullish { color: var(--bear); background: rgba(248,81,73,.12); }
+.pm-score.bearish { color: var(--bull); background: rgba(46,160,67,.12); }
+.pm-score.warning { color: var(--warn); background: rgba(210,153,34,.12); }
+.pm-conf { flex: 1; max-width: 140px; height: 5px; background: var(--bg-elev); border-radius: 3px; overflow: hidden; }
+.pm-conf i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.pm-conf-t { font-size: 11px; color: var(--text-faint); }
 .pm-ai { margin-top: 10px; border-top: 1px dashed var(--border); padding-top: 9px; }
 .pm-ai-btn { background: var(--bg-elev); color: var(--accent); border: 1px solid var(--border); border-radius: 8px; padding: 5px 11px; font-size: 12px; cursor: pointer; }
 .pm-ai-btn:hover:not(:disabled) { border-color: var(--accent); }

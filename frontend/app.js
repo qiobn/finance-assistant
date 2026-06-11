@@ -484,7 +484,11 @@ function renderPlan(d) {
   const lv = plan.levels || {};
   const st = plan.stance || {};
   $("plan-stance").innerHTML = st.label
-    ? `<span class="ps ${st.tone}">${st.label}</span>` : "";
+    ? `<span class="ps ${st.tone}">${st.label}</span>` +
+      (st.score != null
+        ? `<span class="ps-meta">加权多空分 <b>${st.score}</b>/100 · 平均置信 ${st.confidence}% · 分歧 ${st.dispersion}（看多 ${st.buy}/看空 ${st.reduce}）</span>`
+        : "")
+    : "";
 
   const cell = (label, val) =>
     val == null ? "" : `<span class="pl-cell"><i>${label}</i><b>${val}</b></span>`;
@@ -501,10 +505,18 @@ function renderPlan(d) {
     const zone = m.buy_zone ? `${m.buy_zone[0]} ~ ${m.buy_zone[1]}` : "—";
     const tp = m.take_profit != null ? m.take_profit : "—";
     const sl = m.stop_loss != null ? m.stop_loss : "—";
+    const meta = m.score != null
+      ? `<div class="pm-meta"><span class="pm-score ${m.tone}">多空 ${m.score}</span>` +
+        `<span class="pm-conf" title="置信度 ${m.confidence}%"><i style="width:${m.confidence}%"></i></span>` +
+        `<span class="pm-conf-t">置信 ${m.confidence}%</span></div>`
+      : (m.confidence != null
+        ? `<div class="pm-meta"><span class="pm-conf" title="置信度 ${m.confidence}%"><i style="width:${m.confidence}%"></i></span><span class="pm-conf-t">置信 ${m.confidence}%</span></div>`
+        : "");
     return `<div class="pm ${m.tone}">` +
       `<div class="pm-top"><span class="pm-name">${m.name}</span>` +
       `<span class="pm-horizon">${m.horizon}</span>` +
       `<span class="pm-action ${m.tone}">${m.action}</span></div>` +
+      meta +
       `<div class="pm-levels">` +
       `<span class="pm-lv buy"><i>买入区</i>${zone}</span>` +
       `<span class="pm-lv tp"><i>止盈</i>${tp}</span>` +
