@@ -737,6 +737,7 @@ function switchView(view) {
   if (view === "market") loadMarket();
   if (view === "intel") loadIntel();
   if (view === "overview") loadOverview();
+  if (view === "portfolio") loadPortfolio();
   if (view === "scan") loadScanRules();
   if (view === "stock" && chart) setTimeout(() => chart.resize(), 50);
 }
@@ -1118,6 +1119,70 @@ async function runDigestAi() {
 }
 $("digest-refresh").onclick = (e) => withBusy(e.currentTarget, loadDigest, "刷新中…");
 $("digest-ai-btn").onclick = (e) => withBusy(e.currentTarget, runDigestAi, "生成中…");
+
+/* ---------------- Portfolio（持仓） ---------------- */
+function renderPortfolio(d) {
+  const s = d.summary || {};
+  const pnlUp = (s.pnl || 0) >= 0;
+  $("pf-summary").innerHTML = s.count
+    ? `<div class="pf-sum-card"><span class="pf-sum-l">总市值</span><span class="pf-sum-v">${s.market_value}</span></div>` +
+      `<div class="pf-sum-card"><span class="pf-sum-l">总成本</span><span class="pf-sum-v">${s.cost_value}</span></div>` +
+      `<div class="pf-sum-card"><span class="pf-sum-l">总盈亏</span><span class="pf-sum-v ${pnlUp ? "up" : "down"}">${pnlUp ? "+" : ""}${s.pnl}</span></div>` +
+      `<div class="pf-sum-card"><span class="pf-sum-l">盈亏比例</span><span class="pf-sum-v ${pnlUp ? "up" : "down"}">${pnlUp ? "+" : ""}${s.pnl_pct}%</span></div>`
+    : `<div class="muted">还没有持仓记录，用下方表单添加你买入的股票（代码 / 数量 / 成本价）。</div>`;
+
+  const items = d.items || [];
+  if (!items.length) { $("pf-table").innerHTML = ""; return; }
+  $("pf-table").innerHTML =
+    `<table class="pf-tbl"><thead><tr><th>名称</th><th>现价</th><th>成本</th><th>数量</th><th>市值</th><th>盈亏</th><th>盈亏%</th><th>占比</th><th>技术判断</th><th>提示</th><th></th></tr></thead><tbody>` +
+    items.map((it) => {
+      if (it.price == null) {
+        return `<tr><td class="pf-nm" data-code="${it.code}">${it.name}<span class="pf-cd">${it.code}</span></td>` +
+          `<td colspan="9" class="muted">取价失败：${it.error || "无数据"}</td>` +
+          `<td><button class="pf-del" data-code="${it.code}">✕</button></td></tr>`;
+      }
+      const up = (it.pnl || 0) >= 0;
+      return `<tr><td class="pf-nm" data-code="${it.code}">${it.name}<span class="pf-cd">${it.code}</span></td>` +
+        `<td>${it.price}</td><td>${it.cost}</td><td>${it.shares}</td><td>${it.market_value}</td>` +
+        `<td class="${up ? "up" : "down"}">${up ? "+" : ""}${it.pnl}</td>` +
+        `<td class="${up ? "up" : "down"}">${up ? "+" : ""}${it.pnl_pct}%</td>` +
+        `<td>${it.weight ?? "-"}%</td>` +
+        `<td class="pf-vd ${it.verdict_tone || ""}">${it.verdict || "-"}</td>` +
+        `<td class="pf-tip ${it.tip ? it.tip.tone : ""}">${it.tip ? it.tip.text : "-"}</td>` +
+        `<td><button class="pf-del" data-code="${it.code}">✕</button></td></tr>`;
+    }).join("") + `</tbody></table>`;
+
+  $("pf-table").querySelectorAll(".pf-nm").forEach((el) =>
+    (el.onclick = () => { selectStock(el.dataset.code); switchView("stock"); }));
+  $("pf-table").querySelectorAll(".pf-del").forEach((b) =>
+    (b.onclick = async () => { renderPortfolio(await api(`/api/portfolio/${b.dataset.code}`, { method: "DELETE" })); }));
+}
+async function loadPortfolio() {
+  $("pf-summary").innerHTML = '<span class="loading-line"><span class="spin"></span>计算盈亏…</span>';
+  try {
+    renderPortfolio(await api("/api/portfolio"));
+  } catch (e) {
+    $("pf-summary").innerHTML = `<span class="news-empty">加载失败：${e.message}</span>`;
+  }
+}
+async function savePosition() {
+  const code = $("pf-code").value.trim();
+  const shares = $("pf-shares").value;
+  const cost = $("pf-cost").value;
+  if (!code || !shares || !cost) return;
+  try {
+    const d = await api("/api/portfolio", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, shares: Number(shares), cost: Number(cost) }),
+    });
+    $("pf-code").value = ""; $("pf-shares").value = ""; $("pf-cost").value = "";
+    renderPortfolio(d);
+  } catch (e) {
+    $("pf-summary").innerHTML = `<span class="news-empty">保存失败：${e.message}</span>`;
+  }
+}
+$("pf-refresh").onclick = (e) => withBusy(e.currentTarget, loadPortfolio, "刷新中…");
+$("pf-form").addEventListener("submit", (e) => { e.preventDefault(); withBusy($("pf-add"), savePosition, "保存中…"); });
 
 /* ---------------- Glossary（名词解释） ---------------- */
 const GLOSSARY = [

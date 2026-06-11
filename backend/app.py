@@ -542,6 +542,91 @@ def digest_ai_stream(pref: str = Query("balanced")):
     return StreamingResponse(gen(), media_type="text/plain; charset=utf-8")
 
 
+# ---- 持仓与盈亏 ----
+def _position_note(pnl_pct: float, verdict_tone: str) -> dict:
+    """根据浮盈浮亏 + 技术倾向给出『提示』（非投资建议）。"""
+    profit = pnl_pct >= 0
+    if verdict_tone == "bearish":
+        if profit:
+            return {"tone": "warning", "text": "技术面转弱、当前有浮盈：可考虑分批止盈、落袋为安。"}
+        return {"tone": "bearish", "text": "技术面转弱且浮亏：注意风险、设好止损，避免越亏越补。"}
+    if verdict_tone == "bullish":
+        if profit:
+            return {"tone": "bullish", "text": "趋势仍偏强、浮盈中：可继续持有或上移止盈位锁定利润。"}
+        return {"tone": "neutral", "text": "趋势偏强但你成本偏高：可观察企稳信号，不必急于补仓。"}
+    if verdict_tone == "warning":
+        return {"tone": "warning", "text": "信号矛盾/高位震荡：控制仓位，不宜追加。"}
+    return {"tone": "neutral", "text": "方向不明：按计划持有，等更清晰的信号。"}
+
+
+def _eval_position(pos: dict) -> dict:
+    code = str(pos.get("code", "")).zfill(6)
+    shares = float(pos.get("shares") or 0)
+    cost = float(pos.get("cost") or 0)
+    out = {"code": code, "name": data.name_for(code), "shares": shares, "cost": cost,
+           "note_user": pos.get("note", "")}
+    try:
+        c = _compact(code)
+        price = c["close"]
+        out.update({"price": price, "verdict": c["verdict"], "verdict_tone": c["verdict_tone"]})
+    except Exception as exc:
+        out.update({"price": None, "error": str(exc)[:60]})
+        return out
+    mv = price * shares
+    cv = cost * shares
+    pnl = mv - cv
+    pnl_pct = (price / cost - 1) * 100 if cost > 0 else 0.0
+    out.update({
+        "market_value": round(mv, 2), "cost_value": round(cv, 2),
+        "pnl": round(pnl, 2), "pnl_pct": round(pnl_pct, 2),
+        "tip": _position_note(pnl_pct, c["verdict_tone"]),
+    })
+    return out
+
+
+@app.get("/api/portfolio")
+def get_portfolio() -> dict:
+    positions = storage.load_positions()
+    items = list(_EXEC.map(_eval_position, positions)) if positions else []
+    valid = [it for it in items if it.get("price") is not None]
+    total_mv = sum(it["market_value"] for it in valid)
+    total_cv = sum(it["cost_value"] for it in valid)
+    total_pnl = total_mv - total_cv
+    for it in valid:  # 仓位占比（按市值）
+        it["weight"] = round(it["market_value"] / total_mv * 100, 1) if total_mv else 0.0
+    return {
+        "items": items,
+        "summary": {
+            "market_value": round(total_mv, 2), "cost_value": round(total_cv, 2),
+            "pnl": round(total_pnl, 2),
+            "pnl_pct": round((total_mv / total_cv - 1) * 100, 2) if total_cv else 0.0,
+            "count": len(valid),
+        },
+    }
+
+
+@app.post("/api/portfolio")
+def upsert_portfolio(payload: dict = Body(...)) -> dict:
+    code = str(payload.get("code") or "").strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="股票代码不能为空")
+    try:
+        shares = float(payload.get("shares"))
+        cost = float(payload.get("cost"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="数量与成本价必须是数字")
+    if shares <= 0 or cost <= 0:
+        raise HTTPException(status_code=400, detail="数量与成本价必须大于 0")
+    storage.upsert_position(code, shares, cost, str(payload.get("note") or ""))
+    return get_portfolio()
+
+
+@app.delete("/api/portfolio/{code}")
+def delete_portfolio(code: str) -> dict:
+    storage.remove_position(code)
+    return get_portfolio()
+
+
 # ---- LLM 接入：多档配置管理 + 切换 ----
 @app.get("/api/llm/config")
 def llm_get_config() -> dict:
