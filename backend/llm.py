@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from pathlib import Path
 
@@ -153,7 +154,7 @@ def _new_session(cfg: dict) -> tuple["requests.Session", dict]:
     return sess, proxies
 
 
-def chat(messages: list[dict], temperature: float = 0.4, max_tokens: int = 900) -> str:
+def chat(messages: list[dict], temperature: float = 0.4, max_tokens: int = 1500) -> str:
     cfg = get_config()
     if not cfg["api_key"]:
         raise LLMError("尚未配置 LLM：请在网页右上角「AI 设置」填写 base_url / api_key / model。")
@@ -188,7 +189,7 @@ def chat(messages: list[dict], temperature: float = 0.4, max_tokens: int = 900) 
         raise LLMError(f"无法解析 LLM 响应：{resp.text[:200]}") from exc
 
 
-def chat_stream(messages: list[dict], temperature: float = 0.4, max_tokens: int = 900):
+def chat_stream(messages: list[dict], temperature: float = 0.4, max_tokens: int = 1500):
     """流式生成：逐块 yield 文本（OpenAI 兼容 SSE）。"""
     cfg = get_config()
     if not cfg["api_key"]:
@@ -247,7 +248,11 @@ def build_news_tag_messages(batch: list[dict]) -> list[dict]:
 
 
 def parse_json_array(text: str) -> list:
-    """从模型返回里稳健提取 JSON 数组（容忍 ```json 代码块/多余文字）。"""
+    """从模型返回里稳健提取 JSON 数组。
+
+    容忍 ```json 代码块、多余文字；并能从**被截断**的输出里抢救出已完整的对象
+    （逐个匹配 {...} 解析，丢弃最后那个不完整的）。
+    """
     if not text:
         return []
     s = text.strip()
@@ -255,13 +260,21 @@ def parse_json_array(text: str) -> list:
         s = s.strip("`")
         s = s[s.find("\n") + 1:] if "\n" in s else s
     lo, hi = s.find("["), s.rfind("]")
-    if lo == -1 or hi == -1 or hi <= lo:
-        return []
-    try:
-        out = json.loads(s[lo:hi + 1])
-        return out if isinstance(out, list) else []
-    except Exception:
-        return []
+    if lo != -1 and hi != -1 and hi > lo:
+        try:
+            out = json.loads(s[lo:hi + 1])
+            if isinstance(out, list):
+                return out
+        except Exception:
+            pass
+    # 抢救：逐个解析顶层 {...}，兼容 JSON 被 max_tokens 截断的情况
+    objs = []
+    for m in re.finditer(r"\{[^{}]*\}", s):
+        try:
+            objs.append(json.loads(m.group(0)))
+        except Exception:
+            pass
+    return objs
 
 
 def build_stock_intel_messages(name: str, code: str, tagged: list[dict],

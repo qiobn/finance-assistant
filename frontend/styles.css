@@ -410,8 +410,9 @@ body {
 .news-src { font-size: 11px; color: var(--text-faint); }
 .news-tag { font-size: 11px; padding: 1px 7px; border-radius: 9px; background: rgba(47,129,247,.14); color: var(--accent); }
 .news-title { font-size: 13px; line-height: 1.5; }
-.news-title a { color: var(--text); text-decoration: none; }
-.news-title a:hover { color: var(--accent); text-decoration: underline; }
+.news-title a { color: var(--text); text-decoration: underline; text-decoration-color: var(--text-faint); text-underline-offset: 2px; }
+.news-title a:visited { color: var(--text-dim); }
+.news-title a:hover { color: #58a6ff; text-decoration-color: #58a6ff; }
 .news-sum { font-size: 12px; color: var(--text-dim); line-height: 1.6; margin-top: 3px; }
 .news-empty { font-size: 12px; color: var(--text-faint); }
 /* 情绪打标徽章 + 板块情绪榜 */

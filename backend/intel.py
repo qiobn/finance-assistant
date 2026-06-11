@@ -170,7 +170,7 @@ def get_stock_news(code: str, limit: int = 10) -> dict:
 
 
 # ---- LLM 情绪打标（按需，DeepSeek 类便宜模型，批量 + 缓存）----
-_BATCH = 12          # 每次 LLM 请求打标的新闻条数
+_BATCH = 8           # 每次 LLM 请求打标的新闻条数（小批次，避免 JSON 被截断）
 _GLOBAL_CAP = 24     # 单次最多打标的快讯数（控成本）
 _STOCK_CAP = 8       # 个股新闻最多打标数
 
@@ -193,17 +193,18 @@ def tag_news(items: list[dict], cap: int) -> list[dict]:
         chunk = pending[start:start + _BATCH]
         batch = [{"i": i, "title": c["title"], "summary": c.get("summary", "")}
                  for i, c in enumerate(chunk)]
-        text = llm.chat(llm.build_news_tag_messages(batch), temperature=0.1, max_tokens=900)
+        text = llm.chat(llm.build_news_tag_messages(batch), temperature=0.1, max_tokens=1600)
         parsed = {int(r["i"]): r for r in llm.parse_json_array(text) if "i" in r}
         for i, c in enumerate(chunk):
-            r = parsed.get(i, {})
-            rec = {
+            r = parsed.get(i)
+            if r is None:
+                continue  # 该条没解析到（截断/异常）——不缓存，下次重试，避免污染成中性
+            fresh.append({
                 "hash": c["hash"],
                 "sentiment": r.get("sentiment", "中性"),
                 "score": int(r.get("score", 0) or 0),
                 "sectors": (r.get("sectors") or c.get("sectors") or [])[:3],
-            }
-            fresh.append(rec)
+            })
     if fresh:
         db.upsert_news_sentiments(fresh)
     cached.update({rec["hash"]: rec for rec in fresh})
@@ -262,6 +263,6 @@ def analyze_stock_sentiment(code: str, limit: int = _STOCK_CAP, pref: str = "bal
               "利空": sum(1 for n in tagged if n.get("sentiment") == "利空"),
               "中性": sum(1 for n in tagged if n.get("sentiment") == "中性")}
     summary = llm.chat(llm.build_stock_intel_messages(name, code, tagged, net, pref),
-                       temperature=0.4, max_tokens=600)
+                       temperature=0.4, max_tokens=1400)
     return {"code": code, "name": name, "net": net, "counts": counts,
             "items": tagged, "summary": summary, "is_demo": False}
