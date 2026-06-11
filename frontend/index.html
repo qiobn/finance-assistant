@@ -32,6 +32,7 @@
       <div class="sidebar-foot">
         <span id="health-dot" class="dot"></span>
         <span id="health-text">连接中…</span>
+        <button id="glossary-btn" class="gear" title="名词解释 / 新手必读">❓ 术语</button>
         <button id="llm-settings-btn" class="gear" title="AI 设置">⚙ AI</button>
       </div>
     </aside>
@@ -305,6 +306,18 @@
           <li><b>本地 Ollama</b>：base <code>http://localhost:11434/v1</code> · model <code>qwen2.5</code> · key 随便填</li>
         </ul>
       </details>
+    </div>
+  </div>
+
+  <div id="glossary-modal" class="modal" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3>名词解释 · 新手必读</h3>
+        <button id="glossary-close" class="modal-close">×</button>
+      </div>
+      <p class="modal-tip">看不懂某个词？这里用大白话解释本工具里出现的指标与说法。本工具仅供学习研究，<b>不构成投资建议</b>。</p>
+      <input id="glossary-search" class="glossary-search" type="text" placeholder="搜索术语，如 MACD、市盈率、止损…" autocomplete="off" />
+      <div id="glossary-body" class="glossary-body"></div>
     </div>
   </div>
 

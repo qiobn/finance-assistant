@@ -233,6 +233,17 @@ body {
 .chat-msg.user { align-self: flex-end; background: var(--accent); color: #fff; }
 .chat-msg.bot { align-self: flex-start; background: var(--bg-elev); border: 1px solid var(--border); }
 .chat-msg .used { display: block; margin-top: 8px; font-size: 11px; color: var(--text-faint); }
+/* ---------- Glossary（名词解释） ---------- */
+.glossary-search { width: 100%; padding: 10px 12px; border-radius: 8px; background: var(--bg);
+  border: 1px solid var(--border); color: var(--text); font-size: 14px; outline: none; margin-bottom: 14px; }
+.glossary-search:focus { border-color: var(--accent); }
+.glossary-body { overflow-y: auto; max-height: 56vh; display: flex; flex-direction: column; gap: 4px; }
+.gl-cat { font-size: 12px; font-weight: 600; color: var(--accent); margin: 12px 0 4px; }
+.gl-cat:first-child { margin-top: 0; }
+.gl-item { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.gl-term { font-size: 13.5px; font-weight: 600; margin-bottom: 3px; }
+.gl-def { font-size: 12.5px; color: var(--text-dim); line-height: 1.6; }
+
 /* ---------- Daily Digest（晨报） ---------- */
 .digest-date { color: var(--text-faint); font-size: 12px; margin-bottom: 12px; }
 .digest-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
