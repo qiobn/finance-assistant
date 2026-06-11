@@ -733,6 +733,7 @@ async function loadStockNews(code) {
 function switchView(view) {
   document.querySelectorAll(".nav-tab").forEach((t) => t.classList.toggle("active", t.dataset.view === view));
   document.querySelectorAll(".view").forEach((v) => (v.hidden = v.id !== "view-" + view));
+  if (view === "digest") loadDigest();
   if (view === "market") loadMarket();
   if (view === "intel") loadIntel();
   if (view === "overview") loadOverview();
@@ -1035,6 +1036,88 @@ async function runBacktest() {
   }
 }
 $("bt-run").onclick = (e) => withBusy(e.currentTarget, runBacktest, "回测中…");
+
+/* ---------------- Daily Digest（晨报） ---------------- */
+const VTONE = { bullish: "bull", bearish: "bear", warning: "warn", neutral: "" };
+function renderDigest(d) {
+  $("digest-date").textContent = "数据时间：" + d.date + (d.market.is_demo ? "（大盘为演示数据）" : "");
+
+  // 大盘
+  const mk = d.market;
+  const idx = (mk.indices || []).map((i) => {
+    const up = i.pct >= 0;
+    return `<div class="dg-idx"><span>${i.name}</span><span class="${up ? "bull" : "bear"}">${i.price} (${up ? "+" : ""}${i.pct}%)</span></div>`;
+  }).join("");
+  const b = mk.breadth || {};
+  const breadth = b.up != null
+    ? `<div class="dg-breadth">全市场 <span class="bull">涨 ${b.up}</span> / <span class="bear">跌 ${b.down}</span>，涨停 ${b.limit_up ?? "-"} / 跌停 ${b.limit_down ?? "-"}</div>`
+    : "";
+  $("digest-market").innerHTML = (idx || "—") + breadth;
+
+  // 今日提示
+  const alerts = d.alerts || [];
+  $("digest-alerts").innerHTML = alerts.length
+    ? alerts.map((a) => `<div class="dg-alert ${VTONE[a.tone] || ""}">${a.text}</div>`).join("")
+    : `<div class="muted">自选股暂无明显异动或关键信号。</div>`;
+
+  // 自选股体检
+  const wl = d.watchlist || [];
+  $("digest-watch").innerHTML = wl.length
+    ? wl.map((c) => {
+        const up = (c.pct || 0) >= 0;
+        return `<div class="dg-row" data-code="${c.code}"><span class="dg-nm">${c.name}</span>` +
+          `<span class="dg-pct ${up ? "bull" : "bear"}">${up ? "+" : ""}${c.pct ?? "-"}%</span>` +
+          `<span class="dg-vd ${c.verdict_tone || ""}">${c.verdict || "-"}</span></div>`;
+      }).join("")
+    : `<div class="muted">自选股为空，去「个股详情」搜索并加入自选。</div>`;
+  $("digest-watch").querySelectorAll(".dg-row").forEach((r) =>
+    (r.onclick = () => { selectStock(r.dataset.code); switchView("stock"); }));
+
+  // 板块与快讯
+  const sec = d.sectors || {};
+  const lead = (sec.leaders || []).map((s) => `<span class="dg-sec bull">${s.name} +${s.pct}%</span>`).join("");
+  const lag = (sec.laggards || []).map((s) => `<span class="dg-sec bear">${s.name} ${s.pct}%</span>`).join("");
+  const news = (d.news || []).slice(0, 6).map((n) => {
+    const sent = n.sentiment && n.sentiment !== "中性" ? `<span class="dg-sent ${n.score > 0 ? "bull" : "bear"}">${n.sentiment}</span>` : "";
+    return `<div class="dg-news">${sent}${n.title}</div>`;
+  }).join("");
+  $("digest-intel").innerHTML =
+    (lead || lag ? `<div class="dg-secs">${lead}${lag}</div>` : "") +
+    (news || `<div class="muted">暂无快讯（或板块数据获取失败，可在「情报」页刷新）。</div>`);
+}
+async function loadDigest() {
+  $("digest-market").innerHTML = '<span class="loading-line"><span class="spin"></span>汇总今日数据…</span>';
+  try {
+    const d = await api("/api/digest");
+    renderDigest(d);
+  } catch (e) {
+    $("digest-market").innerHTML = `<span class="news-empty">加载失败：${e.message}</span>`;
+  }
+}
+async function runDigestAi() {
+  const out = $("digest-ai-out");
+  out.classList.remove("placeholder");
+  out.innerHTML = '<span class="loading-line"><span class="spin"></span>正在请求你的 LLM，等待首个字…</span>';
+  const pref = $("digest-pref") ? $("digest-pref").value : "balanced";
+  try {
+    const res = await fetch(`/api/digest/ai/stream?pref=${pref}`, { method: "POST" });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    out.textContent = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      out.textContent += decoder.decode(value, { stream: true });
+      out.scrollTop = out.scrollHeight;
+    }
+    if (!out.textContent.trim()) out.textContent = "（模型未返回内容，请重试或检查配置）";
+  } catch (e) {
+    out.textContent = "调用失败：" + e.message;
+  }
+}
+$("digest-refresh").onclick = (e) => withBusy(e.currentTarget, loadDigest, "刷新中…");
+$("digest-ai-btn").onclick = (e) => withBusy(e.currentTarget, runDigestAi, "生成中…");
 
 /* ---------------- Boot ---------------- */
 $("add-btn").onclick = () => currentCode && addWatch(currentCode);

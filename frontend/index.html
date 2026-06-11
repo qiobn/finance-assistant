@@ -38,6 +38,7 @@
 
     <main class="main">
       <nav class="topnav">
+        <button class="nav-tab" data-view="digest">晨报</button>
         <button class="nav-tab" data-view="market">大盘</button>
         <button class="nav-tab" data-view="intel">情报</button>
         <button class="nav-tab active" data-view="stock">个股详情</button>
@@ -45,6 +46,46 @@
         <button class="nav-tab" data-view="scan">选股扫描</button>
         <button class="nav-tab" data-view="chat">AI 问答</button>
       </nav>
+
+      <!-- ===== 每日复盘 / 晨报 ===== -->
+      <section id="view-digest" class="view" hidden>
+        <div class="view-head">
+          <h2>每日复盘 <span class="plan-sub">大盘 + 自选股 + 情报汇成一页 · 结构化部分免费</span></h2>
+          <button id="digest-refresh" class="add-btn">刷新</button>
+        </div>
+        <div id="digest-date" class="digest-date"></div>
+        <div class="digest-grid">
+          <div class="digest-card">
+            <div class="digest-h">📈 大盘</div>
+            <div id="digest-market" class="digest-body">—</div>
+          </div>
+          <div class="digest-card">
+            <div class="digest-h">⚠️ 今日提示 <span class="digest-h-sub">规则派生，仅供留意</span></div>
+            <div id="digest-alerts" class="digest-body">—</div>
+          </div>
+          <div class="digest-card">
+            <div class="digest-h">📌 自选股体检</div>
+            <div id="digest-watch" class="digest-body">—</div>
+          </div>
+          <div class="digest-card">
+            <div class="digest-h">🧠 板块与快讯</div>
+            <div id="digest-intel" class="digest-body">—</div>
+          </div>
+        </div>
+        <section class="analysis ai-section">
+          <div class="ai-head">
+            <h2>AI 复盘 <span class="plan-sub">用你的大模型把今天讲成人话 · 消耗 token</span></h2>
+            <select id="digest-pref" class="ai-pref" title="投资偏好">
+              <option value="balanced">均衡</option>
+              <option value="short">短线收益</option>
+              <option value="long">长期持有</option>
+            </select>
+            <button id="digest-ai-btn" class="ai-btn">📝 生成今日复盘</button>
+          </div>
+          <div id="digest-ai-out" class="ai-output placeholder">点上方「生成今日复盘」，由你接入的大模型基于今日数据写一份大白话简报。</div>
+        </section>
+        <p class="scan-note">结构化卡片为本地规则汇总（免费）；点「生成今日复盘」才调用大模型（消耗 token）。所有内容仅供研究，非投资建议。</p>
+      </section>
 
       <!-- ===== 大盘 ===== -->
       <section id="view-market" class="view" hidden>

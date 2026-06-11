@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -465,6 +466,80 @@ def chat(payload: dict = Body(...)) -> dict:
         "used": [{"code": c["code"], "name": c["name"]} for c in contexts],
         "sources_used": [b["label"] for b in extras],
     }
+
+
+# ---- 每日复盘 / 晨报 ----
+def _digest_alerts(items: list[dict]) -> list[dict]:
+    """从自选股技术信号派生『今日提示』（纯规则、零成本）。"""
+    alerts = []
+    for c in items:
+        if c.get("error"):
+            continue
+        name, code, pct = c.get("name"), c.get("code"), c.get("pct")
+        if pct is not None and abs(pct) >= 5:
+            alerts.append({"code": code, "tone": "bullish" if pct > 0 else "bearish",
+                           "text": f"{name} 今日{'大涨' if pct > 0 else '大跌'} {pct}%，注意波动"})
+        for s in c.get("signals", []):
+            dim, lab = s.get("dim"), s.get("label", "")
+            if dim == "RSI" and "超买" in lab:
+                alerts.append({"code": code, "tone": "warning", "text": f"{name} {lab}，短期追高风险偏大"})
+            elif dim == "RSI" and "超卖" in lab:
+                alerts.append({"code": code, "tone": "bullish", "text": f"{name} {lab}，关注超跌反弹机会"})
+            elif dim == "MACD" and "金叉" in lab:
+                alerts.append({"code": code, "tone": "bullish", "text": f"{name} MACD {lab}，动能转强"})
+            elif dim == "MACD" and "死叉" in lab:
+                alerts.append({"code": code, "tone": "bearish", "text": f"{name} MACD {lab}，动能转弱"})
+        if c.get("verdict_tone") == "bearish":
+            alerts.append({"code": code, "tone": "bearish", "text": f"{name} 技术面：{c.get('verdict')}"})
+    return alerts
+
+
+@app.get("/api/digest")
+def digest() -> dict:
+    """每日复盘结构化数据（纯规则、免费）：大盘 + 自选股体检 + 提示 + 板块/快讯。"""
+    codes = storage.load()
+    items = list(_EXEC.map(_safe_compact, codes)) if codes else []
+    valid = [c for c in items if not c.get("error")]
+    movers = sorted(valid, key=lambda c: (c.get("pct") if c.get("pct") is not None else 0))
+    try:
+        mk = data.get_index_overview()
+    except Exception:
+        mk = {"indices": [], "breadth": {}}
+    try:
+        sec = intel.get_sector_board("industry")
+    except Exception:
+        sec = {"leaders": [], "laggards": []}
+    try:
+        news = intel.get_global_news(20)
+        news_top = (news.get("items") or [])[:8]
+    except Exception:
+        news_top = []
+    return {
+        "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "market": {"indices": mk.get("indices", []), "breadth": mk.get("breadth", {}),
+                   "is_demo": mk.get("is_demo", False)},
+        "watchlist": valid,
+        "top_up": list(reversed(movers))[:3],
+        "top_down": movers[:3],
+        "alerts": _digest_alerts(valid),
+        "sectors": {"leaders": (sec.get("leaders") or [])[:6], "laggards": (sec.get("laggards") or [])[:4]},
+        "news": news_top,
+    }
+
+
+@app.post("/api/digest/ai/stream")
+def digest_ai_stream(pref: str = Query("balanced")):
+    """用 LLM 把今日大盘/自选股/情报写成一份大白话复盘（流式，消耗 token）。"""
+    blocks = _build_context_blocks(["market", "watchlist", "intel"])
+
+    def gen():
+        try:
+            for piece in llm.chat_stream(llm.build_digest_messages(blocks, pref)):
+                yield piece
+        except llm.LLMError as exc:
+            yield f"\n[错误] {exc}"
+
+    return StreamingResponse(gen(), media_type="text/plain; charset=utf-8")
 
 
 # ---- LLM 接入：多档配置管理 + 切换 ----
