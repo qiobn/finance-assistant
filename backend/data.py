@@ -109,6 +109,40 @@ def search_stocks(query: str, limit: int = 20) -> list[dict]:
     return df[mask].head(limit).to_dict("records")
 
 
+def _etf_spot_map() -> dict:
+    """ETF 实时行情快照 {code: 最新价}，TTL 缓存。"""
+    cached = cache_get("etf_spot_map")
+    if cached is not None:
+        return cached
+    m: dict = {}
+    if AKSHARE_AVAILABLE:
+        try:
+            df = _ak(ak.fund_etf_spot_em)
+            df["代码"] = df["代码"].astype(str).str.zfill(6)
+            m = {r["代码"]: float(r["最新价"]) for _, r in df.iterrows()
+                 if pd.notna(r.get("最新价"))}
+        except Exception:
+            m = {}
+    cache_set("etf_spot_map", m)
+    return m
+
+
+def latest_price(code: str) -> float | None:
+    """实时最新价（盘中现价 / 收盘后当日收盘）；取不到返回 None。
+
+    仅 ETF/LOF 需要：其日线源（新浪）当日收盘有滞后，故用实时快照补当日价。
+    个股日线源（东财）已含当日 bar，直接用最新收盘即可，无需额外实时查询。
+    """
+    code = str(code).strip().zfill(6)
+    if not _is_fund(code):
+        return None
+    try:
+        p = _etf_spot_map().get(code)
+        return float(p) if p else None
+    except Exception:
+        return None
+
+
 def name_for(code: str) -> str:
     code = str(code).strip().zfill(6)
     try:

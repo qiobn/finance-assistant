@@ -592,8 +592,10 @@ def _eval_position(pos: dict) -> dict:
            "note_user": pos.get("note", "")}
     try:
         c = _compact(code)
-        price = c["close"]
-        out.update({"price": price, "verdict": c["verdict"], "verdict_tone": c["verdict_tone"]})
+        rt = data.latest_price(code)  # 实时价优先，避免用昨日收盘当现价
+        price = rt if rt else c["close"]
+        out.update({"price": price, "realtime": rt is not None,
+                    "verdict": c["verdict"], "verdict_tone": c["verdict_tone"]})
     except Exception as exc:
         out.update({"price": None, "error": str(exc)[:60]})
         return out
