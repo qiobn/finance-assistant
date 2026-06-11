@@ -278,6 +278,7 @@ function resetForm() {
   $("cfg-key").value = "";
   $("cfg-key").placeholder = "sk-...（本地保存，不上传）";
   $("cfg-model").value = "";
+  $("cfg-proxy").value = "";
   $("form-title").textContent = "新增接入";
   $("cfg-reset").hidden = true;
 }
@@ -326,6 +327,7 @@ function editProfile(p) {
   $("cfg-name").value = p.name;
   $("cfg-base").value = p.base_url;
   $("cfg-model").value = p.model;
+  $("cfg-proxy").value = p.proxy || "";
   $("cfg-key").value = "";
   $("cfg-key").placeholder = p.configured ? "已配置：" + p.api_key_masked + "（留空则不修改）" : "sk-...";
   $("form-title").textContent = "编辑接入：" + p.name;
@@ -355,7 +357,7 @@ async function saveLlmConfig() {
   }
   status.textContent = "保存中…"; status.className = "cfg-status";
   try {
-    const body = { name: $("cfg-name").value.trim(), base_url: base, model };
+    const body = { name: $("cfg-name").value.trim(), base_url: base, model, proxy: $("cfg-proxy").value.trim() };
     if (id) body.id = id;
     const key = $("cfg-key").value.trim();
     if (key) body.api_key = key;
@@ -470,7 +472,8 @@ function renderPlan(d) {
     cell("布林下轨", lv.boll_lower) + cell("布林上轨", lv.boll_upper);
 
   const masters = plan.masters || [];
-  $("plan-masters").innerHTML = masters.map((m) => {
+  const wrap = $("plan-masters");
+  wrap.innerHTML = masters.map((m) => {
     const zone = m.buy_zone ? `${m.buy_zone[0]} ~ ${m.buy_zone[1]}` : "—";
     const tp = m.take_profit != null ? m.take_profit : "—";
     const sl = m.stop_loss != null ? m.stop_loss : "—";
@@ -482,9 +485,42 @@ function renderPlan(d) {
       `<span class="pm-lv buy"><i>买入区</i>${zone}</span>` +
       `<span class="pm-lv tp"><i>止盈</i>${tp}</span>` +
       `<span class="pm-lv sl"><i>止损</i>${sl}</span></div>` +
-      `<div class="pm-reason">${m.reason}</div></div>`;
+      `<div class="pm-reason">${m.reason}</div>` +
+      `<div class="pm-ai">` +
+      `<button class="pm-ai-btn" data-key="${m.key}">🧠 让这位大师 AI 解读</button>` +
+      `<div class="pm-ai-out" hidden></div></div></div>`;
   }).join("");
+  wrap.querySelectorAll(".pm-ai-btn").forEach((btn) => {
+    btn.onclick = () => runMasterAi(d.code, btn.dataset.key, btn);
+  });
   $("plan-disclaimer").textContent = plan.disclaimer || "";
+}
+
+async function runMasterAi(code, key, btn) {
+  const out = btn.parentElement.querySelector(".pm-ai-out");
+  out.hidden = false;
+  out.textContent = "正在请求你的 LLM…";
+  btn.disabled = true;
+  const oldText = btn.textContent;
+  btn.textContent = "解读中…";
+  try {
+    const res = await fetch(`/api/stock/${code}/master/${key}/ai/stream?days=160`, { method: "POST" });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    out.textContent = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      out.textContent += decoder.decode(value, { stream: true });
+    }
+    btn.textContent = "↻ 重新解读";
+  } catch (e) {
+    out.textContent = "调用失败：" + e.message;
+    btn.textContent = oldText;
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function loadPlan(code) {

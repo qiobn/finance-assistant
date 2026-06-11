@@ -68,6 +68,7 @@ def list_profiles() -> dict:
         {
             "id": pid, "name": p.get("name") or pid,
             "base_url": p.get("base_url", ""), "model": p.get("model", ""),
+            "proxy": p.get("proxy", ""),
             "api_key_masked": _mask(p.get("api_key", "")), "configured": bool(p.get("api_key")),
         }
         for pid, p in data["profiles"].items()
@@ -76,7 +77,8 @@ def list_profiles() -> dict:
 
 
 def upsert_profile(pid: str | None, name: str | None, base_url: str | None,
-                   api_key: str | None, model: str | None) -> dict:
+                   api_key: str | None, model: str | None,
+                   proxy: str | None = None) -> dict:
     data = _load()
     if not pid:
         pid = uuid.uuid4().hex[:8]
@@ -86,6 +88,8 @@ def upsert_profile(pid: str | None, name: str | None, base_url: str | None,
         "base_url": (base_url or existing.get("base_url") or _DEFAULT_BASE).strip().rstrip("/"),
         "model": (model or existing.get("model") or "gpt-4o-mini").strip(),
         "api_key": existing.get("api_key", ""),
+        # 代理：留空=直连（默认忽略系统代理）；需要时填 http(s)://host:port
+        "proxy": (proxy if proxy is not None else existing.get("proxy", "") or "").strip(),
     }
     if api_key and api_key.strip() and api_key.strip() != "****":
         prof["api_key"] = api_key.strip()
@@ -119,11 +123,13 @@ def get_config() -> dict:
     pid = data.get("active")
     p = data["profiles"].get(pid) if pid else None
     if p and p.get("api_key"):
-        return {"base_url": p["base_url"], "api_key": p["api_key"], "model": p["model"]}
+        return {"base_url": p["base_url"], "api_key": p["api_key"], "model": p["model"],
+                "proxy": (p.get("proxy") or "").strip()}
     return {
         "base_url": (p or {}).get("base_url") or os.getenv("LLM_BASE_URL") or _DEFAULT_BASE,
         "api_key": (p or {}).get("api_key") or os.getenv("LLM_API_KEY") or "",
         "model": (p or {}).get("model") or os.getenv("LLM_MODEL") or "gpt-4o-mini",
+        "proxy": ((p or {}).get("proxy") or os.getenv("LLM_PROXY") or "").strip(),
     }
 
 
@@ -138,13 +144,23 @@ def public_config() -> dict:
     }
 
 
+def _new_session(cfg: dict) -> tuple["requests.Session", dict]:
+    """返回 (session, proxies)。默认忽略系统代理直连；填了 proxy 才走指定代理。"""
+    sess = requests.Session()
+    sess.trust_env = False  # 不读取系统 HTTP_PROXY/HTTPS_PROXY，避免被错误代理 403 拦截
+    proxy = (cfg.get("proxy") or "").strip()
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    return sess, proxies
+
+
 def chat(messages: list[dict], temperature: float = 0.4, max_tokens: int = 900) -> str:
     cfg = get_config()
     if not cfg["api_key"]:
         raise LLMError("尚未配置 LLM：请在网页右上角「AI 设置」填写 base_url / api_key / model。")
     url = cfg["base_url"].rstrip("/") + "/chat/completions"
+    sess, proxies = _new_session(cfg)
     try:
-        resp = requests.post(
+        resp = sess.post(
             url,
             headers={
                 "Authorization": f"Bearer {cfg['api_key']}",
@@ -158,9 +174,10 @@ def chat(messages: list[dict], temperature: float = 0.4, max_tokens: int = 900) 
                 "stream": False,
             },
             timeout=90,
+            proxies=proxies,
         )
     except requests.RequestException as exc:
-        raise LLMError(f"调用 LLM 失败（网络/地址错误）：{exc}") from exc
+        raise LLMError(f"调用 LLM 失败（网络/地址/代理错误）：{exc}") from exc
 
     if resp.status_code != 200:
         raise LLMError(f"LLM 返回错误 {resp.status_code}：{resp.text[:200]}")
@@ -177,17 +194,19 @@ def chat_stream(messages: list[dict], temperature: float = 0.4, max_tokens: int 
     if not cfg["api_key"]:
         raise LLMError("尚未配置 LLM：请在网页左下「⚙ AI」填写 base_url / api_key / model。")
     url = cfg["base_url"].rstrip("/") + "/chat/completions"
+    sess, proxies = _new_session(cfg)
     try:
-        resp = requests.post(
+        resp = sess.post(
             url,
             headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"},
             json={"model": cfg["model"], "messages": messages, "temperature": temperature,
                   "max_tokens": max_tokens, "stream": True},
             timeout=90,
             stream=True,
+            proxies=proxies,
         )
     except requests.RequestException as exc:
-        raise LLMError(f"调用 LLM 失败（网络/地址错误）：{exc}") from exc
+        raise LLMError(f"调用 LLM 失败（网络/地址/代理错误）：{exc}") from exc
 
     if resp.status_code != 200:
         raise LLMError(f"LLM 返回错误 {resp.status_code}：{resp.text[:200]}")
@@ -282,6 +301,121 @@ def _plan_text(plan: dict | None, pref: str) -> str:
         return ""
 
 
+# ---- 投资大师人设：每位大师 = 一个可单独调用的「skill」 ----
+MASTER_PERSONA = {
+    "value": {
+        "speaker": "沃伦·巴菲特（价值/安全边际）",
+        "philosophy": (
+            "你信奉价值投资：只买能看懂的好生意，看重护城河、长期盈利能力与『安全边际』；"
+            "用近五年估值分位判断贵贱，别人贪婪时恐惧、别人恐惧时贪婪；偏好分批买入、长期持有，"
+            "不被短期波动吓走，但若估值高得离谱或基本面恶化会离场。"),
+    },
+    "growth": {
+        "speaker": "彼得·林奇（成长/PEG）",
+        "philosophy": (
+            "你擅长成长股，核心是『成长与估值是否匹配』——用 PEG（市盈率÷增速）衡量，PEG<1 才有性价比；"
+            "你喜欢能讲清楚的生意、稳定增长，警惕『成长跟不上估值』的高位股，成长一旦转负就果断退出。"),
+    },
+    "trend": {
+        "speaker": "趋势交易者（利弗莫尔/德鲁肯米勒）",
+        "philosophy": (
+            "你顺势而为、做右侧交易：只在大方向（周/月线）向上时参与，回踩关键均线（MA20）企稳才买，"
+            "绝不逆势抄底；信奉『截断亏损、让利润奔跑』，跌破趋势线/MA60 或固定比例必须止损，"
+            "超买贴上轨时减仓锁利。"),
+    },
+    "rebound": {
+        "speaker": "约翰·邓普顿（逆向/超跌）",
+        "philosophy": (
+            "你在『最悲观的时点』逆向买入：RSI 超卖、贴近布林下轨的恐慌错杀里找超跌反弹机会；"
+            "但你纪律极严——仓位要小、只博到中轨/MA20 就走，一旦跌破近期低点立刻止损，绝不恋战。"),
+    },
+    "quality": {
+        "speaker": "查理·芒格（质量/护城河）",
+        "philosophy": (
+            "你只买『伟大的生意』并在合理价格买入：看重高且稳定的 ROE、高毛利率、低负债等护城河证据，"
+            "用多元思维模型判断生意质量；宁可错过也不将就平庸生意，买入后长期持有，基本面恶化才离场。"),
+    },
+    "aggressive_growth": {
+        "speaker": "凯茜·伍德（颠覆式高成长）",
+        "philosophy": (
+            "你聚焦高速成长与颠覆性创新：看重营收/利润的高增长斜率与赛道空间，愿为成长容忍阶段性高估值，"
+            "拿得住剧烈波动；但一旦成长熄火（增速转负/逻辑被证伪）会果断退出。"),
+    },
+    "risk": {
+        "speaker": "纳西姆·塔勒布（尾部风险/反脆弱）",
+        "philosophy": (
+            "你是风险守门人：最在意『活下来、别被尾部风险击穿』。看重波动率、最大回撤与盈亏不对称性，"
+            "只在『下行有限、上行可观』时才下重注；强调先定止损、按波动控制仓位、分批进出、永远留余地。"),
+    },
+}
+
+# 风控型大师（不给买卖点，给仓位与风险评估）
+_RISK_KEYS = {"risk"}
+
+
+def build_master_messages(stock: dict, funda: dict | None, plan: dict | None,
+                          master_key: str) -> list[dict]:
+    """单个大师 skill：用该大师的第一人称口吻 + 规则引擎为他算好的价位，给买卖解读。"""
+    persona = MASTER_PERSONA.get(master_key)
+    if not persona:
+        raise LLMError(f"未知的大师：{master_key}")
+    master = None
+    for m in (plan or {}).get("masters", []):
+        if m.get("key") == master_key:
+            master = m
+            break
+
+    q = stock["quote"]
+    k = stock["kline"]
+    latest = {
+        "收盘": q["close"], "涨跌幅%": q["pct"], "日期": q["date"],
+        "MA20": k["ma20"][-1], "MA60": k["ma60"][-1], "RSI12": k["rsi12"][-1],
+        "布林上轨": k["boll_upper"][-1], "布林下轨": k["boll_lower"][-1],
+    }
+    if master:
+        bz = f"买入区{master['buy_zone']}" if master.get("buy_zone") else "（当前无明确买区）"
+        tp = f"，止盈≈{master['take_profit']}" if master.get("take_profit") is not None else ""
+        sl = f"，止损≈{master['stop_loss']}" if master.get("stop_loss") is not None else ""
+        rule_line = f"我的纪律给出：{master['action']} —— {bz}{tp}{sl}。依据：{master['reason']}"
+    else:
+        rule_line = "（规则引擎暂无该维度结论，请基于数据谨慎判断。）"
+
+    if master_key in _RISK_KEYS:
+        structure = (
+            "输出要简洁（150-300字），固定结构：\n"
+            "①【风险评估】波动率/回撤/盈亏比说明这只票危不危险；\n"
+            "②【建议仓位】单票仓位上限 + 为什么；\n"
+            "③【保命纪律】止损与分批进出原则；\n"
+            "④【最担心的尾部风险】一句话。\n"
+            "结尾用一句你风格的话，并提醒这不是投资建议。"
+        )
+    else:
+        structure = (
+            "下方『我的纪律』是规则引擎已按你的风格算好的具体价位，请采纳这些数字并用你的投资哲学解释为什么。\n"
+            "输出要简洁（150-300字），固定结构：\n"
+            "①【我的结论】看多/看空/观望 + 一句话理由；\n"
+            "②【我会在哪买】具体价位或触发条件；\n"
+            "③【我会在哪卖/离场】止盈位 + 止损位；\n"
+            "④【我最担心的风险】一句话。\n"
+            "结尾用一句你风格的话，并提醒这不是投资建议。"
+        )
+    system = (
+        f"你现在以投资大师『{persona['speaker']}』的身份，用第一人称中文解读这只 A 股。\n"
+        f"{persona['philosophy']}\n"
+        "只能基于提供的数据，不编造数字；数据为日线非实时；不要断言一定涨跌，不说满仓/梭哈。\n"
+        + structure
+    )
+    extra = "\n".join(x for x in (_trends_text(stock), _valuation_text(funda)) if x)
+    user = (
+        f"股票：{stock['name']}（{stock['code']}）\n"
+        f"最新数据：{json.dumps(latest, ensure_ascii=False)}\n"
+        f"{extra}\n"
+        f"{rule_line}\n\n"
+        f"请以『{persona['speaker']}』的身份给出你的买卖解读。"
+    )
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
 def build_messages(stock: dict, funda: dict | None = None,
                    plan: dict | None = None, pref: str = "balanced") -> list[dict]:
     """把行情/指标/多周期趋势/估值分位/大师买卖纪律打包成给 LLM 的中文提示。
@@ -308,8 +442,9 @@ def build_messages(stock: dict, funda: dict | None = None,
         "你不能预测『几月几号买』，只能给『在什么位置、满足什么条件就买/卖』。\n"
         "输出结构：\n"
         "1) 一句话总体判断（结合用户偏好）；\n"
-        "2) 投资大师怎么看：【价值/逆向(格雷厄姆·巴菲特)】【成长(彼得林奇·PEG)】【趋势(顺势)】"
-        "【超跌反弹(短线)】各 1-2 句，数据不足就直说；\n"
+        "2) 投资大师怎么看：综合【价值(巴菲特/格雷厄姆)】【质量护城河(芒格)】【成长(林奇)】"
+        "【高成长颠覆(伍德)】【趋势(顺势)】【超跌反弹(邓普顿)】各派观点，并参考【风险经理(塔勒布)】的仓位建议，"
+        "对一致与分歧之处都点出，数据不足就直说；\n"
         "3) 【操作计划】用要点给出：① 买入区间/触发条件 ② 第一止盈位/减仓条件 ③ 止损位 "
         "（直接引用下方算好的价位，按用户偏好排序侧重）；\n"
         "4) 情景化前瞻：分『偏多情景』『偏空情景』，各说明需要满足什么条件/突破或跌破哪个价位才成立；\n"

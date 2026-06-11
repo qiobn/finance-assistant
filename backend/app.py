@@ -363,6 +363,7 @@ def llm_upsert_profile(payload: dict = Body(...)) -> dict:
         base_url=payload.get("base_url"),
         api_key=payload.get("api_key"),
         model=payload.get("model"),
+        proxy=payload.get("proxy"),
     )
 
 
@@ -402,6 +403,33 @@ def stock_ai_stream(code: str, days: int = Query(160, ge=30, le=500), adjust: st
     def gen():
         try:
             for piece in llm.chat_stream(llm.build_messages(payload, funda, plan, pref)):
+                yield piece
+        except llm.LLMError as exc:
+            yield f"\n[错误] {exc}"
+
+    return StreamingResponse(gen(), media_type="text/plain; charset=utf-8")
+
+
+@app.get("/api/masters")
+def masters() -> dict:
+    """可单独调用 AI 解读的投资大师列表（skill 清单）。"""
+    return {"masters": [{"key": k, "speaker": v["speaker"]}
+                        for k, v in llm.MASTER_PERSONA.items()]}
+
+
+@app.post("/api/stock/{code}/master/{key}/ai/stream")
+def stock_master_ai_stream(code: str, key: str,
+                           days: int = Query(160, ge=30, le=500), adjust: str = "qfq"):
+    """单个大师 skill：以该大师口吻流式输出买卖解读（仅此调用才消耗 token）。"""
+    if key not in llm.MASTER_PERSONA:
+        raise HTTPException(status_code=404, detail="未知的大师")
+    payload = _build_stock_payload(code, days, adjust)
+    funda = data.get_fundamentals(code)
+    plan = _build_plan(code, days, adjust)["plan"]
+
+    def gen():
+        try:
+            for piece in llm.chat_stream(llm.build_master_messages(payload, funda, plan, key)):
                 yield piece
         except llm.LLMError as exc:
             yield f"\n[错误] {exc}"

@@ -88,7 +88,7 @@
 
         <section class="analysis">
           <div class="plan-head">
-            <h2>操作建议 <span class="plan-sub">投资大师纪律 · 买入区/止盈/止损</span></h2>
+            <h2>投资大师 <span class="plan-sub">本地规则即时生成 · 免费 · 点「AI 解读」才用大模型</span></h2>
             <div id="plan-stance" class="plan-stance"></div>
           </div>
           <div id="plan-levels" class="plan-levels"></div>
@@ -110,17 +110,17 @@
 
         <section class="analysis ai-section">
           <div class="ai-head">
-            <h2>AI 深度点评 <span id="ai-model" class="ai-model"></span></h2>
+            <h2>投资委员会综合点评 <span id="ai-model" class="ai-model"></span></h2>
             <div class="ai-ctrl">
               <select id="ai-pref" title="投资偏好：影响大师视角与买卖价位侧重">
                 <option value="balanced">均衡</option>
                 <option value="short">短线收益</option>
                 <option value="long">长期持有</option>
               </select>
-              <button id="ai-btn" class="ai-btn">用我的 LLM 分析</button>
+              <button id="ai-btn" class="ai-btn">让委员会综合分析</button>
             </div>
           </div>
-          <div id="ai-output" class="ai-output">选择投资偏好（短线/长期/均衡）后点「用我的 LLM 分析」，由你接入的大模型结合大师纪律给出买卖计划。需先在左下「⚙ AI」配置。</div>
+          <div id="ai-output" class="ai-output">选择投资偏好（短线/长期/均衡）后点「让委员会综合分析」，由你接入的大模型综合四位大师给出最终买卖计划。需先在左下「⚙ AI」配置。（消耗 token）</div>
         </section>
       </section>
 
@@ -189,6 +189,8 @@
       <input id="cfg-key" type="password" placeholder="sk-...（本地保存，不上传；编辑时留空则不修改）" />
       <label>Model</label>
       <input id="cfg-model" type="text" placeholder="如 deepseek-chat / gpt-4o-mini / qwen-plus" />
+      <label>代理（可选，默认直连）</label>
+      <input id="cfg-proxy" type="text" placeholder="国内 DeepSeek/Kimi 留空直连；OpenAI 等需翻墙时填 http://127.0.0.1:7890" />
       <div class="modal-actions">
         <span id="cfg-status" class="cfg-status"></span>
         <button id="cfg-reset" class="add-btn" hidden>取消编辑</button>

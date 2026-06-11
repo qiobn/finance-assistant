@@ -228,24 +228,162 @@ def _growth_master(df: pd.DataFrame, funda: dict | None, lv: dict) -> dict:
             "reason": f"PE={pe:.0f}、增速 {growth:.0f}% → PEG≈{peg:.2f}(>1.5) 偏贵，林奇会等回调。"}
 
 
-_BUY_ACTION = ("买", "建仓", "反弹")
-_REDUCE_ACTION = ("减", "回避", "不买", "偏贵", "卖")
+def _latest_fin(funda: dict | None, col: str) -> float | None:
+    """财务摘要里某指标的最近一期非空值。"""
+    for row in ((funda or {}).get("financials") or []):
+        val = _f(row.get(col))
+        if val is not None:
+            return val
+    return None
+
+
+def _annual_fin(funda: dict | None, col: str) -> float | None:
+    """优先取最近『年报(12-31)』的指标——ROE 等累计型指标按季报会被严重低估。
+
+    找不到年报时退回最近一期非空值。
+    """
+    rows = (funda or {}).get("financials") or []
+    for row in rows:
+        period = str(row.get("报告期", ""))
+        if period.endswith("12-31"):
+            val = _f(row.get(col))
+            if val is not None:
+                return val
+    return _latest_fin(funda, col)
+
+
+def _quality_master(df: pd.DataFrame, funda: dict | None, lv: dict) -> dict:
+    """芒格 · 质量/护城河：好生意（高 ROE、高毛利、低负债）+ 价格是否合理。"""
+    base = {"key": "quality", "name": "质量护城河（芒格）", "horizon": "中长线"}
+    roe = _annual_fin(funda, "净资产收益率")  # ROE 用年报，避免季报累计值低估
+    margin = _latest_fin(funda, "销售毛利率")
+    debt = _latest_fin(funda, "资产负债率")
+    if roe is None and margin is None:
+        return {**base, "action": "数据不足", "tone": "neutral", "buy_zone": None,
+                "take_profit": None, "stop_loss": None,
+                "reason": "缺少 ROE/毛利率等质量指标，无法判断是不是『好生意』。"}
+    v = (funda or {}).get("valuation") or {}
+    pcts = [p for p in (_f(v.get("pe_ttm_pct")), _f(v.get("pb_pct"))) if p is not None]
+    val_pct = min(pcts) if pcts else None
+    bits = " / ".join(filter(None, [
+        f"ROE {roe:.1f}%" if roe is not None else None,
+        f"毛利 {margin:.0f}%" if margin is not None else None,
+        f"负债率 {debt:.0f}%" if debt is not None else None,
+    ]))
+    good = ((roe is None or roe >= 12) and (margin is None or margin >= 25)
+            and (debt is None or debt <= 65) and (roe is not None or margin is not None))
+    strong = (roe is not None and roe >= 18) and (margin is None or margin >= 30)
+    close, ma20, ma60 = lv["close"], lv["ma20"], lv["ma60"]
+    buy_zone = _zone(ma20 * 0.97, ma20 * 1.03) if ma20 else None
+    stop = _round(min(x for x in (ma60, close * 0.9 if close else None) if x is not None)) if (ma60 or close) else None
+    if not good:
+        weak = []
+        if roe is not None and roe < 12:
+            weak.append("ROE 偏低")
+        if margin is not None and margin < 25:
+            weak.append("毛利偏薄")
+        if debt is not None and debt > 65:
+            weak.append("负债偏高")
+        return {**base, "action": "生意质量一般，不碰", "tone": "bearish",
+                "buy_zone": None, "take_profit": None, "stop_loss": None,
+                "reason": f"{bits}：{('、'.join(weak)) or '质量不达标'}。芒格只买伟大的生意，宁可错过不将就。"}
+    if val_pct is not None and val_pct >= 70:
+        return {**base, "action": "好生意但偏贵，等回调", "tone": "neutral",
+                "buy_zone": None, "take_profit": None, "stop_loss": None,
+                "reason": f"{bits}，确是好生意；但估值近五年 {val_pct:.0f}% 分位偏贵，合理价才出手，耐心等回调。"}
+    quality_word = "卓越" if strong else "稳健"
+    return {**base, "action": "好生意+价格合理，可买/持有", "tone": "bullish",
+            "buy_zone": buy_zone, "take_profit": None, "stop_loss": stop,
+            "reason": (f"{bits}，{quality_word}的生意"
+                       + (f"，估值近五年 {val_pct:.0f}% 分位不贵" if val_pct is not None else "")
+                       + f"。芒格式『好生意合理价』，回踩 MA20({ma20}) 分批、长期持有，基本面恶化才离场。")}
+
+
+def _wood_master(df: pd.DataFrame, funda: dict | None, lv: dict) -> dict:
+    """凯茜·伍德 · 高成长/颠覆：营收高增长可容忍高估值，成长熄火则离场。"""
+    base = {"key": "aggressive_growth", "name": "高成长颠覆（凯茜·伍德）", "horizon": "中长线"}
+    rev_g = _latest_fin(funda, "营业总收入同比增长率")
+    np_g = _latest_fin(funda, "净利润同比增长率")
+    if rev_g is None and np_g is None:
+        return {**base, "action": "数据不足", "tone": "neutral", "buy_zone": None,
+                "take_profit": None, "stop_loss": None,
+                "reason": "缺少营收/净利增速，无法判断成长爆发力。"}
+    g = rev_g if rev_g is not None else np_g
+    bits = " / ".join(filter(None, [
+        f"营收增速 {rev_g:.0f}%" if rev_g is not None else None,
+        f"净利增速 {np_g:.0f}%" if np_g is not None else None,
+    ]))
+    close, ma20 = lv["close"], lv["ma20"]
+    buy_zone = _zone(ma20 * 0.95, close) if (ma20 and close) else None
+    stop = _round(close * 0.82) if close else None  # 高成长波动大，止损放宽
+    if g >= 25:
+        return {**base, "action": "高成长，看长做多", "tone": "bullish",
+                "buy_zone": buy_zone, "take_profit": None, "stop_loss": stop,
+                "reason": (f"{bits}，处于高速增长期。伍德重赛道与成长斜率、容忍阶段性高估值，"
+                           f"回调即分批、拿长线；但成长一旦转负要果断退出（止损放宽到约 −18%）。")}
+    if g <= 0:
+        return {**base, "action": "成长熄火，退出", "tone": "bearish",
+                "buy_zone": None, "take_profit": None, "stop_loss": None,
+                "reason": f"{bits}（零或负增长），颠覆成长逻辑不成立，伍德式策略不参与。"}
+    return {**base, "action": "成长平庸，吸引力不足", "tone": "neutral",
+            "buy_zone": None, "take_profit": None, "stop_loss": None,
+            "reason": f"{bits}，增速不够亮眼；伍德偏好爆发式成长，此处性价比一般。"}
+
+
+def _risk_master(df: pd.DataFrame, lv: dict) -> dict:
+    """塔勒布 · 风险经理：波动率/最大回撤/盈亏比 → 给建议仓位与尾部风险提示。"""
+    base = {"key": "risk", "name": "风险经理（塔勒布）", "horizon": "风控"}
+    close = df["close"].astype(float)
+    rets = close.pct_change().dropna().tail(120)
+    if len(rets) < 20:
+        return {**base, "action": "数据不足", "tone": "neutral", "buy_zone": None,
+                "take_profit": None, "stop_loss": None, "reason": "样本不足，无法评估波动与回撤。"}
+    ann_vol = float(rets.std() * (244 ** 0.5) * 100)
+    win = close.tail(120)
+    max_dd = float((win / win.cummax() - 1).min() * 100)
+
+    # 盈亏比（不对称性）：上行到压力 vs 下行到支撑
+    c, sup, res = lv["close"], lv["support"], lv["resistance"]
+    rr = None
+    if c and sup and res and c > sup and res > c:
+        up = (res - c) / c
+        down = (c - sup) / c
+        rr = round(up / down, 2) if down > 0 else None
+
+    if ann_vol > 60 or max_dd < -50:
+        pos, tone = "≤ 10%", "warning"
+    elif ann_vol > 45:
+        pos, tone = "≤ 20%", "warning"
+    elif ann_vol > 30:
+        pos, tone = "≤ 30%", "neutral"
+    else:
+        pos, tone = "≤ 40%", "neutral"
+    rr_text = (f"盈亏比≈{rr}（{'不对称占优，值得下注' if rr and rr >= 2 else '一般/偏差，谨慎'}）；"
+               if rr is not None else "")
+    return {**base, "action": f"建议单票仓位 {pos}", "tone": tone,
+            "buy_zone": None, "take_profit": None, "stop_loss": None,
+            "reason": (f"年化波动率≈{ann_vol:.0f}%、近120日最大回撤≈{max_dd:.0f}%。{rr_text}"
+                       f"塔勒布只在『亏损有限、盈利可观』时下注：务必先定止损，再按上限建议控制仓位，"
+                       f"分批进出、避免一把梭被尾部风险击穿。")}
 
 
 def _stance(masters: list[dict]) -> dict:
-    """综合各大师，给一个总体操作倾向。"""
-    buy = sum(1 for m in masters if any(w in m["action"] for w in _BUY_ACTION) and m["tone"] != "bearish")
-    reduce = sum(1 for m in masters if m["tone"] == "bearish" or any(w in m["action"] for w in _REDUCE_ACTION))
-    triggered = [m for m in masters if m["action"] not in ("数据不足", "未触发", "观望（趋势未确认）")]
-    if buy >= 2 and reduce == 0:
+    """综合各『方向型』大师（排除风控角色），给总体操作倾向。"""
+    skip = {"数据不足", "未触发", "观望（趋势未确认）"}
+    directional = [m for m in masters if m["key"] != "risk" and m["action"] not in skip]
+    buy = sum(1 for m in directional if m["tone"] == "bullish")
+    reduce = sum(1 for m in directional if m["tone"] == "bearish")
+    if buy >= 3 and reduce <= 1:
         label, tone = "多位大师偏买入 / 分批", "bullish"
-    elif reduce >= 2 and buy == 0:
+    elif reduce >= 3 and buy == 0:
         label, tone = "多位大师偏回避 / 减仓", "bearish"
-    elif buy and reduce:
+    elif buy and reduce and abs(buy - reduce) <= 1:
         label, tone = "分歧较大：买卖逻辑并存，降低仓位", "warning"
-    elif buy:
-        label, tone = "局部买点：仅部分逻辑成立，轻仓试", "bullish"
-    elif not triggered:
+    elif buy > reduce:
+        label, tone = "偏买入：多数逻辑成立，控制仓位", "bullish"
+    elif reduce > buy:
+        label, tone = "偏谨慎：负面逻辑居多，观望/减仓", "bearish"
+    elif not directional:
         label, tone = "暂无明确买卖点，观望", "neutral"
     else:
         label, tone = "以观望 / 持有为主", "neutral"
@@ -259,10 +397,13 @@ def build_plan(df: pd.DataFrame, trends: dict | None = None,
         return {"levels": {}, "masters": [], "stance": {}, "disclaimer": ""}
     lv = _key_levels(df)
     masters = [
-        _trend_master(df, trends or {}, lv),
         _value_master(df, funda, lv),
+        _quality_master(df, funda, lv),
         _growth_master(df, funda, lv),
+        _wood_master(df, funda, lv),
+        _trend_master(df, trends or {}, lv),
         _rebound_master(df, lv),
+        _risk_master(df, lv),
     ]
     return {
         "levels": lv,
