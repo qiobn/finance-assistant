@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from pathlib import Path
 
@@ -153,7 +154,7 @@ def _new_session(cfg: dict) -> tuple["requests.Session", dict]:
     return sess, proxies
 
 
-def chat(messages: list[dict], temperature: float = 0.4, max_tokens: int = 900) -> str:
+def chat(messages: list[dict], temperature: float = 0.4, max_tokens: int = 1500) -> str:
     cfg = get_config()
     if not cfg["api_key"]:
         raise LLMError("尚未配置 LLM：请在网页右上角「AI 设置」填写 base_url / api_key / model。")
@@ -188,7 +189,7 @@ def chat(messages: list[dict], temperature: float = 0.4, max_tokens: int = 900) 
         raise LLMError(f"无法解析 LLM 响应：{resp.text[:200]}") from exc
 
 
-def chat_stream(messages: list[dict], temperature: float = 0.4, max_tokens: int = 900):
+def chat_stream(messages: list[dict], temperature: float = 0.4, max_tokens: int = 1500):
     """流式生成：逐块 yield 文本（OpenAI 兼容 SSE）。"""
     cfg = get_config()
     if not cfg["api_key"]:
@@ -227,6 +228,78 @@ def chat_stream(messages: list[dict], temperature: float = 0.4, max_tokens: int 
                 yield piece
         except (KeyError, IndexError, ValueError):
             continue
+
+
+def build_news_tag_messages(batch: list[dict]) -> list[dict]:
+    """批量新闻情绪打标：要求模型只输出 JSON 数组，省 token。
+
+    batch: [{"i": 序号, "title": .., "summary": ..}]
+    """
+    system = (
+        "你是中文财经新闻分析助手。对每条新闻判断它对相关 A 股板块/主题的情绪倾向。"
+        "严格只输出一个 JSON 数组，不要任何多余文字或解释。"
+        "数组每项格式：{\"i\": 序号(整数), \"sentiment\": \"利好\"|\"利空\"|\"中性\", "
+        "\"score\": -100到100的整数(利好为正、利空为负、中性接近0), "
+        "\"sectors\": [最多3个受影响的板块或主题中文短词]}。"
+    )
+    lines = [f'{n["i"]}. {n["title"]}｜{n.get("summary", "")}' for n in batch]
+    user = "请逐条分析以下新闻并输出 JSON 数组：\n" + "\n".join(lines)
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def parse_json_array(text: str) -> list:
+    """从模型返回里稳健提取 JSON 数组。
+
+    容忍 ```json 代码块、多余文字；并能从**被截断**的输出里抢救出已完整的对象
+    （逐个匹配 {...} 解析，丢弃最后那个不完整的）。
+    """
+    if not text:
+        return []
+    s = text.strip()
+    if s.startswith("```"):
+        s = s.strip("`")
+        s = s[s.find("\n") + 1:] if "\n" in s else s
+    lo, hi = s.find("["), s.rfind("]")
+    if lo != -1 and hi != -1 and hi > lo:
+        try:
+            out = json.loads(s[lo:hi + 1])
+            if isinstance(out, list):
+                return out
+        except Exception:
+            pass
+    # 抢救：逐个解析顶层 {...}，兼容 JSON 被 max_tokens 截断的情况
+    objs = []
+    for m in re.finditer(r"\{[^{}]*\}", s):
+        try:
+            objs.append(json.loads(m.group(0)))
+        except Exception:
+            pass
+    return objs
+
+
+def build_stock_intel_messages(name: str, code: str, tagged: list[dict],
+                               net: float, pref: str = "balanced") -> list[dict]:
+    """消息面（事件驱动）解读：基于已打标的个股新闻给出综合判断。"""
+    pref_name = _PREF_GUIDE.get(pref, _PREF_GUIDE["balanced"])[0]
+    lines = []
+    for n in tagged[:10]:
+        tag = n.get("sentiment", "中性")
+        lines.append(f"[{tag}] {n.get('time','')} {n.get('title','')}")
+    news_text = "\n".join(lines) if lines else "（暂无可用新闻）"
+    system = (
+        "你是严谨的 A 股『消息面/事件驱动』分析师，面向新手用通俗中文。"
+        "只能基于下方已标注情绪的新闻作答，不编造；新闻可能滞后或已被price-in，"
+        "务必提醒『消息≠涨跌、需与价格/资金印证』，并强调非投资建议。\n"
+        f"用户偏好：{pref_name}。\n"
+        "输出结构：①【消息面总体】偏多/偏空/中性 + 一句话；②【关键催化/利空】最多列 3 条；"
+        "③【对趋势的潜在影响】结合可能的板块联动；④【风险/证伪点】。控制在 200-300 字。"
+    )
+    user = (
+        f"股票：{name}（{code}）\n"
+        f"近期新闻情绪净值（利好为正）：{net}\n"
+        f"已标注新闻：\n{news_text}\n\n请给出消息面解读。"
+    )
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
 def build_chat_messages(question: str, contexts: list[dict]) -> list[dict]:

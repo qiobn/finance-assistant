@@ -558,6 +558,14 @@ function renderSectors(d) {
     `<div class="sec-group"><div class="sec-head bear">领跌板块</div>${laggards || '<div class="news-empty">暂无</div>'}</div>`;
 }
 
+function sentBadge(n) {
+  if (!n.sentiment) return "";
+  const cls = n.sentiment === "利好" ? "pos" : n.sentiment === "利空" ? "neg" : "neu";
+  const sc = (n.score || n.score === 0) && n.sentiment !== "中性"
+    ? ` ${n.score > 0 ? "+" : ""}${n.score}` : "";
+  return `<span class="news-sent ${cls}">${n.sentiment}${sc}</span>`;
+}
+
 function renderNews(d) {
   const box = $("news-stream");
   const items = d.items || [];
@@ -566,11 +574,31 @@ function renderNews(d) {
     const tags = (n.sectors || []).map((s) => `<span class="news-tag">${s}</span>`).join("");
     const title = n.url
       ? `<a href="${n.url}" target="_blank" rel="noreferrer">${n.title}</a>` : n.title;
-    return `<div class="news-item"><div class="news-top"><span class="news-time">${n.time}</span>${tags}</div>` +
+    return `<div class="news-item"><div class="news-top"><span class="news-time">${n.time}</span>${sentBadge(n)}${tags}</div>` +
       `<div class="news-title">${title}</div>` +
       (n.summary ? `<div class="news-sum">${n.summary}</div>` : "") + "</div>";
   }).join("");
 }
+
+async function runNewsSentiment() {
+  const btn = $("news-sentiment-btn"); const bar = $("news-sentiment-bar");
+  const old = btn.textContent; btn.disabled = true; btn.textContent = "分析中…";
+  try {
+    const d = await api("/api/news/sentiment?limit=40&cap=24", { method: "POST" });
+    if (d.is_demo) { bar.hidden = false; bar.innerHTML = '<span class="news-empty">数据源暂不可用，无法打标。</span>'; return; }
+    renderNews(d);
+    const c = d.counts || {};
+    const secs = (d.sectors || []).slice(0, 6).map((s) =>
+      `<span class="news-tag ${s.score >= 0 ? "pos" : "neg"}">${s.sector} ${s.score > 0 ? "+" : ""}${s.score}</span>`).join("");
+    bar.hidden = false;
+    bar.innerHTML =
+      `<div class="sent-counts">情绪统计：<b class="pos">利好 ${c.利好 || 0}</b> · <b class="neg">利空 ${c.利空 || 0}</b> · 中性 ${c.中性 || 0}</div>` +
+      `<div class="sent-secs">板块情绪榜：${secs || "—"}</div>`;
+  } catch (e) {
+    bar.hidden = false; bar.innerHTML = `<span class="news-empty">打标失败：${e.message}</span>`;
+  } finally { btn.disabled = false; btn.textContent = old; }
+}
+$("news-sentiment-btn").onclick = runNewsSentiment;
 
 async function loadIntel() {
   const sb = $("sector-board");
@@ -591,14 +619,36 @@ function renderStockNews(d) {
   box.innerHTML = items.map((n) => {
     const title = n.url ? `<a href="${n.url}" target="_blank" rel="noreferrer">${n.title}</a>` : n.title;
     return `<div class="news-item"><div class="news-top"><span class="news-time">${n.time}</span>` +
-      (n.source ? `<span class="news-src">${n.source}</span>` : "") + "</div>" +
+      (n.source ? `<span class="news-src">${n.source}</span>` : "") + sentBadge(n) + "</div>" +
       `<div class="news-title">${title}</div>` +
       (n.summary ? `<div class="news-sum">${n.summary}</div>` : "") + "</div>";
   }).join("");
 }
 
+async function runStockIntel() {
+  if (!currentCode) return;
+  const btn = $("stock-intel-btn"); const out = $("stock-intel-out");
+  const pref = $("ai-pref") ? $("ai-pref").value : "balanced";
+  const old = btn.textContent; btn.disabled = true; btn.textContent = "分析中…";
+  out.hidden = false; out.textContent = "正在分析消息面…";
+  try {
+    const d = await api(`/api/stock/${currentCode}/intel?limit=8&pref=${pref}`, { method: "POST" });
+    if (d.is_demo) { out.innerHTML = '<span class="news-empty">暂无足够新闻用于消息面分析。</span>'; return; }
+    if (d.items && d.items.length) renderStockNews(d);
+    const c = d.counts || {};
+    const head = `<div class="sent-counts">消息面净值 <b class="${d.net >= 0 ? "pos" : "neg"}">${d.net > 0 ? "+" : ""}${d.net}</b>` +
+      ` · 利好 ${c.利好 || 0} · 利空 ${c.利空 || 0} · 中性 ${c.中性 || 0}</div>`;
+    out.innerHTML = head + `<div class="pm-ai-text">${(d.summary || "").replace(/\n/g, "<br>")}</div>`;
+  } catch (e) {
+    out.innerHTML = `<span class="news-empty">分析失败：${e.message}</span>`;
+  } finally { btn.disabled = false; btn.textContent = old; }
+}
+$("stock-intel-btn").onclick = runStockIntel;
+
 async function loadStockNews(code) {
   const box = $("stock-news");
+  const io = $("stock-intel-out");
+  if (io) { io.hidden = true; io.innerHTML = ""; }
   if (!cacheGet("snews:" + code)) box.innerHTML = skeleton(2, "funda-skel");
   try {
     await swr("snews:" + code, `/api/stock/${code}/news?limit=8`, (d) => {

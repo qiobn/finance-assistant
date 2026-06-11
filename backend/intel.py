@@ -7,11 +7,13 @@
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import time
 
 import pandas as pd
 
+from . import db, llm
 from .data import AKSHARE_AVAILABLE, _ak, cache_get, cache_set
 
 if AKSHARE_AVAILABLE:
@@ -165,3 +167,102 @@ def get_stock_news(code: str, limit: int = 10) -> dict:
         return out
     except Exception as exc:
         return {"code": code, "items": [], "is_demo": True, "error": str(exc)[:120]}
+
+
+# ---- LLM 情绪打标（按需，DeepSeek 类便宜模型，批量 + 缓存）----
+_BATCH = 8           # 每次 LLM 请求打标的新闻条数（小批次，避免 JSON 被截断）
+_GLOBAL_CAP = 24     # 单次最多打标的快讯数（控成本）
+_STOCK_CAP = 8       # 个股新闻最多打标数
+
+
+def _news_hash(item: dict) -> str:
+    raw = (item.get("title", "") + "|" + item.get("time", "")).encode("utf-8")
+    return hashlib.md5(raw).hexdigest()
+
+
+def tag_news(items: list[dict], cap: int) -> list[dict]:
+    """给新闻打情绪标签：先查缓存，未命中的批量送 LLM，结果落库。会消耗 token。"""
+    items = items[:cap]
+    for it in items:
+        it["hash"] = _news_hash(it)
+    cached = db.get_news_sentiments([it["hash"] for it in items])
+
+    pending = [it for it in items if it["hash"] not in cached]
+    fresh: list[dict] = []
+    for start in range(0, len(pending), _BATCH):
+        chunk = pending[start:start + _BATCH]
+        batch = [{"i": i, "title": c["title"], "summary": c.get("summary", "")}
+                 for i, c in enumerate(chunk)]
+        text = llm.chat(llm.build_news_tag_messages(batch), temperature=0.1, max_tokens=1600)
+        parsed = {int(r["i"]): r for r in llm.parse_json_array(text) if "i" in r}
+        for i, c in enumerate(chunk):
+            r = parsed.get(i)
+            if r is None:
+                continue  # 该条没解析到（截断/异常）——不缓存，下次重试，避免污染成中性
+            fresh.append({
+                "hash": c["hash"],
+                "sentiment": r.get("sentiment", "中性"),
+                "score": int(r.get("score", 0) or 0),
+                "sectors": (r.get("sectors") or c.get("sectors") or [])[:3],
+            })
+    if fresh:
+        db.upsert_news_sentiments(fresh)
+    cached.update({rec["hash"]: rec for rec in fresh})
+
+    for it in items:
+        tag = cached.get(it["hash"], {})
+        it["sentiment"] = tag.get("sentiment", "中性")
+        it["score"] = tag.get("score", 0)
+        if tag.get("sectors"):
+            it["sectors"] = tag["sectors"]
+    return items
+
+
+def _aggregate_sectors(tagged: list[dict], top: int = 8) -> list[dict]:
+    agg: dict[str, dict] = {}
+    for n in tagged:
+        for s in (n.get("sectors") or []):
+            a = agg.setdefault(s, {"sector": s, "score": 0, "count": 0, "pos": 0, "neg": 0})
+            a["score"] += int(n.get("score", 0) or 0)
+            a["count"] += 1
+            if n.get("sentiment") == "利好":
+                a["pos"] += 1
+            elif n.get("sentiment") == "利空":
+                a["neg"] += 1
+    rows = sorted(agg.values(), key=lambda x: x["score"], reverse=True)
+    return rows[:top]
+
+
+def analyze_global_sentiment(limit: int = 40, cap: int = _GLOBAL_CAP) -> dict:
+    """对快讯做 LLM 情绪打标，并按板块汇总情绪榜。消耗 token（缓存后重复几乎免费）。"""
+    base = get_global_news(limit)
+    if base.get("is_demo"):
+        return {"items": [], "sectors": [], "is_demo": True}
+    tagged = tag_news(base["items"], cap)
+    counts = {"利好": 0, "利空": 0, "中性": 0}
+    for n in tagged:
+        counts[n.get("sentiment", "中性")] = counts.get(n.get("sentiment", "中性"), 0) + 1
+    return {"items": tagged, "sectors": _aggregate_sectors(tagged), "counts": counts, "is_demo": False}
+
+
+def analyze_stock_sentiment(code: str, limit: int = _STOCK_CAP, pref: str = "balanced") -> dict:
+    """个股『消息面』：打标新闻 + 情绪净值 + LLM 综述。消耗 token。"""
+    code = str(code).strip().zfill(6)
+    base = get_stock_news(code, limit)
+    try:
+        from .data import name_for
+        name = name_for(code)
+    except Exception:
+        name = code
+    if base.get("is_demo") or not base.get("items"):
+        return {"code": code, "name": name, "net": 0, "items": [], "summary": "", "is_demo": True}
+    tagged = tag_news(base["items"], limit)
+    scores = [int(n.get("score", 0) or 0) for n in tagged]
+    net = round(sum(scores) / len(scores), 1) if scores else 0
+    counts = {"利好": sum(1 for n in tagged if n.get("sentiment") == "利好"),
+              "利空": sum(1 for n in tagged if n.get("sentiment") == "利空"),
+              "中性": sum(1 for n in tagged if n.get("sentiment") == "中性")}
+    summary = llm.chat(llm.build_stock_intel_messages(name, code, tagged, net, pref),
+                       temperature=0.4, max_tokens=1400)
+    return {"code": code, "name": name, "net": net, "counts": counts,
+            "items": tagged, "summary": summary, "is_demo": False}

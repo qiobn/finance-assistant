@@ -175,6 +175,25 @@ def stock_news(code: str, limit: int = Query(10, ge=1, le=30)) -> dict:
     return intel.get_stock_news(code, limit)
 
 
+# ---- 情报 Phase 2：LLM 情绪打标 + 板块情绪榜 + 个股消息面（按需，消耗 token）----
+@app.post("/api/news/sentiment")
+def news_sentiment(limit: int = Query(40, ge=10, le=100),
+                   cap: int = Query(24, ge=5, le=40)) -> dict:
+    try:
+        return intel.analyze_global_sentiment(limit, cap)
+    except llm.LLMError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/stock/{code}/intel")
+def stock_intel(code: str, limit: int = Query(8, ge=3, le=20),
+                pref: str = Query("balanced")) -> dict:
+    try:
+        return intel.analyze_stock_sentiment(code, limit, pref)
+    except llm.LLMError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 def _safe_compact(code: str) -> dict:
     try:
         return _compact(code)
