@@ -906,23 +906,28 @@ function addChatMsg(role, text, used) {
   div.scrollIntoView({ behavior: "smooth", block: "end" });
   return div;
 }
+const chatSources = new Set();
 async function sendChat() {
   const input = $("chat-text");
   const q = input.value.trim();
   if (!q) return;
   input.value = "";
+  const sources = [...chatSources];
   addChatMsg("user", q);
   const thinking = addChatMsg("bot", "思考中…");
   try {
     const d = await api("/api/chat", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question: q }),
+      body: JSON.stringify({ question: q, sources }),
     });
     thinking.textContent = d.text;
-    if (d.used && d.used.length) {
+    const refs = [];
+    if (d.used && d.used.length) refs.push(...d.used.map((x) => `${x.name}(${x.code})`));
+    if (d.sources_used && d.sources_used.length) refs.push(...d.sources_used);
+    if (refs.length) {
       const u = document.createElement("span");
       u.className = "used";
-      u.textContent = "参考数据：" + d.used.map((x) => `${x.name}(${x.code})`).join("、");
+      u.textContent = "参考数据：" + refs.join("、");
       thinking.appendChild(u);
     }
   } catch (e) {
@@ -932,6 +937,13 @@ async function sendChat() {
 $("chat-send").onclick = (e) => withBusy(e.currentTarget, sendChat, "发送中…");
 $("chat-text").addEventListener("keydown", (e) => {
   if (e.key === "Enter") withBusy($("chat-send"), sendChat, "发送中…");
+});
+document.querySelectorAll(".ctx-chip").forEach((chip) => {
+  chip.onclick = () => {
+    const src = chip.dataset.src;
+    if (chatSources.has(src)) { chatSources.delete(src); chip.classList.remove("on"); }
+    else { chatSources.add(src); chip.classList.add("on"); }
+  };
 });
 
 /* ---------------- Boot ---------------- */

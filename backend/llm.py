@@ -302,13 +302,16 @@ def build_stock_intel_messages(name: str, code: str, tagged: list[dict],
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def build_chat_messages(question: str, contexts: list[dict]) -> list[dict]:
-    """自然语言问答：把问题与相关个股数据打包。"""
+def build_chat_messages(question: str, contexts: list[dict],
+                        extras: list[dict] | None = None) -> list[dict]:
+    """自然语言问答：把问题、相关个股数据、以及用户勾选引入的上下文块打包。"""
     system = (
         "你是一名严谨客观的 A 股投研助手，面向新手用通俗中文回答。"
         "只能基于下方提供的数据作答，不要编造数字；涉及指标要解释含义并指出矛盾；"
         "必须提示风险、强调不是投资建议、技术指标有滞后性。"
         "不要给出『一定涨跌』『满仓梭哈』之类的话。若数据不足以回答，请直说。"
+        "用户可能勾选了『大盘总览』『自选股技术面』『情报快讯』等参考上下文，"
+        "请结合这些上下文综合作答，并在合适处引用其中的关键信息。"
     )
     if contexts:
         ctx = "\n\n".join(
@@ -318,8 +321,14 @@ def build_chat_messages(question: str, contexts: list[dict]) -> list[dict]:
             for c in contexts
         )
     else:
-        ctx = "（未识别到具体股票，请基于通用投资常识回答，并建议用户指明股票代码/名称。）"
-    user = f"相关数据：\n{ctx}\n\n用户问题：{question}"
+        ctx = "（未识别到具体股票。）"
+    blocks = [f"个股数据：\n{ctx}"]
+    for ex in (extras or []):
+        text = (ex.get("text") or "").strip()
+        if text:
+            blocks.append(f"【{ex.get('label', '参考上下文')}】\n{text}")
+    body = "\n\n".join(blocks)
+    user = f"参考资料：\n{body}\n\n用户问题：{question}"
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
