@@ -120,7 +120,7 @@ def get_global_news(limit: int = 40) -> dict:
     ckey = f"news_global:{limit}"
     cached = cache_get(ckey)
     if cached is not None:
-        return cached
+        return _with_sentiment(cached)
     if not AKSHARE_AVAILABLE:
         return {"items": [], "is_demo": True}
     try:
@@ -137,7 +137,7 @@ def get_global_news(limit: int = 40) -> dict:
             })
         out = {"items": items, "is_demo": False}
         cache_set(ckey, out)
-        return out
+        return _with_sentiment(out)
     except Exception as exc:
         return {"items": [], "is_demo": True, "error": str(exc)[:120]}
 
@@ -148,7 +148,7 @@ def get_stock_news(code: str, limit: int = 10) -> dict:
     ckey = f"news_stock:{code}:{limit}"
     cached = cache_get(ckey)
     if cached is not None:
-        return cached
+        return _with_sentiment(cached)
     if not AKSHARE_AVAILABLE:
         return {"code": code, "items": [], "is_demo": True}
     try:
@@ -164,7 +164,7 @@ def get_stock_news(code: str, limit: int = 10) -> dict:
             })
         out = {"code": code, "items": items, "is_demo": False}
         cache_set(ckey, out)
-        return out
+        return _with_sentiment(out)
     except Exception as exc:
         return {"code": code, "items": [], "is_demo": True, "error": str(exc)[:120]}
 
@@ -173,6 +173,31 @@ def get_stock_news(code: str, limit: int = 10) -> dict:
 _BATCH = 8           # 每次 LLM 请求打标的新闻条数（小批次，避免 JSON 被截断）
 _GLOBAL_CAP = 24     # 单次最多打标的快讯数（控成本）
 _STOCK_CAP = 8       # 个股新闻最多打标数
+
+
+def _attach_cached_sentiment(items: list[dict]) -> None:
+    """把 DB 里已打标过的情绪结果合并进新闻项——让缓存在加载/刷新时即生效，
+    无需再次点击『AI 情绪打标』重复消耗 token。就地修改 items。"""
+    if not items:
+        return
+    for it in items:
+        it["hash"] = _news_hash(it)
+    cached = db.get_news_sentiments([it["hash"] for it in items])
+    for it in items:
+        rec = cached.get(it["hash"])
+        if rec:
+            it["sentiment"] = rec.get("sentiment", "中性")
+            it["score"] = rec.get("score", 0)
+            if rec.get("sectors"):
+                it["sectors"] = rec["sectors"]
+
+
+def _with_sentiment(out: dict) -> dict:
+    try:
+        _attach_cached_sentiment(out.get("items") or [])
+    except Exception:
+        pass
+    return out
 
 
 def _news_hash(item: dict) -> str:
