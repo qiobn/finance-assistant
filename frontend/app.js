@@ -166,6 +166,7 @@ async function selectStock(code) {
   document.querySelectorAll("#watchlist li").forEach((li) =>
     li.classList.toggle("active", li.dataset.code === code));
   updateAddBtn();
+  resetBacktest();
   loadFundamentals(code);
   loadPlan(code);
   loadStockNews(code);
@@ -946,9 +947,99 @@ document.querySelectorAll(".ctx-chip").forEach((chip) => {
   };
 });
 
+/* ---------------- Backtest ---------------- */
+let btChart = null;
+function resetBacktest() {
+  $("bt-summary").hidden = true;
+  $("bt-chart").hidden = true;
+  $("bt-trades").innerHTML = "";
+}
+async function initBacktestStrategies() {
+  try {
+    const { strategies } = await api("/api/backtest/strategies");
+    $("bt-strategy").innerHTML = strategies
+      .map((s) => `<option value="${s.id}" title="${s.desc}">${s.label}</option>`)
+      .join("");
+  } catch {}
+}
+function btMetric(label, val, cls) {
+  return `<div class="bt-metric"><span class="bt-m-l">${label}</span><span class="bt-m-v ${cls || ""}">${val}</span></div>`;
+}
+function renderBacktest(d) {
+  const sum = $("bt-summary");
+  if (d.error) {
+    sum.hidden = false;
+    sum.innerHTML = `<div class="bt-err">回测失败：${d.error}</div>`;
+    $("bt-chart").hidden = true;
+    $("bt-trades").innerHTML = "";
+    return;
+  }
+  const m = d.metrics;
+  const sign = (v) => (v > 0 ? "pos" : v < 0 ? "neg" : "");
+  sum.hidden = false;
+  sum.innerHTML =
+    `<div class="bt-head-line">${d.strategy_label}｜${d.start} ~ ${d.end}（${d.days} 个交易日）` +
+    `<span class="bt-desc">${d.strategy_desc}</span></div>` +
+    `<div class="bt-metrics">` +
+    btMetric("策略收益", m.total_return + "%", sign(m.total_return)) +
+    btMetric("买入持有", m.benchmark_return + "%", sign(m.benchmark_return)) +
+    btMetric("超额", (m.excess > 0 ? "+" : "") + m.excess + "%", sign(m.excess)) +
+    btMetric("年化", m.annualized + "%", sign(m.annualized)) +
+    btMetric("最大回撤", m.max_drawdown + "%", "neg") +
+    btMetric("胜率", m.win_rate == null ? "—" : m.win_rate + "%") +
+    btMetric("交易次数", m.trades) +
+    btMetric("持仓占比", m.exposure + "%") +
+    btMetric("夏普", m.sharpe) +
+    `</div>`;
+
+  const box = $("bt-chart");
+  box.hidden = false;
+  if (!btChart) btChart = echarts.init(box, null, { renderer: "canvas" });
+  btChart.setOption({
+    backgroundColor: "transparent",
+    tooltip: { trigger: "axis" },
+    legend: { data: ["策略", "买入持有"], textStyle: { color: "#9aa7b6" }, top: 0 },
+    grid: { left: 48, right: 16, top: 28, bottom: 28 },
+    xAxis: { type: "category", data: d.curve.map((c) => c.date),
+      axisLine: { lineStyle: { color: "#232d3b" } }, axisLabel: { color: "#9aa7b6" } },
+    yAxis: { type: "value", scale: true, axisLabel: { color: "#9aa7b6", formatter: (v) => v.toFixed(2) },
+      splitLine: { lineStyle: { color: "#1a232f" } } },
+    series: [
+      { name: "策略", type: "line", showSymbol: false, smooth: true,
+        data: d.curve.map((c) => c.eq), lineStyle: { width: 2, color: "#3b82f6" }, itemStyle: { color: "#3b82f6" } },
+      { name: "买入持有", type: "line", showSymbol: false, smooth: true,
+        data: d.curve.map((c) => c.bench), lineStyle: { width: 1.5, color: "#8b95a3" }, itemStyle: { color: "#8b95a3" } },
+    ],
+  }, true);
+  btChart.resize();
+
+  const trades = d.trades || [];
+  $("bt-trades").innerHTML = trades.length
+    ? `<table class="bt-tbl"><thead><tr><th>建仓</th><th>买入</th><th>平仓</th><th>卖出</th><th>收益</th><th>持有日</th></tr></thead><tbody>` +
+      trades.map((t) =>
+        `<tr><td>${t.entry_date}</td><td>${t.entry_price}</td><td>${t.exit_date}</td><td>${t.exit_price}</td>` +
+        `<td class="${t.ret > 0 ? "pos" : t.ret < 0 ? "neg" : ""}">${t.ret > 0 ? "+" : ""}${t.ret}%</td><td>${t.bars}</td></tr>`
+      ).join("") + `</tbody></table>`
+    : `<p class="muted">该区间内策略未触发任何交易。</p>`;
+}
+async function runBacktest() {
+  if (!currentCode) return;
+  const strategy = $("bt-strategy").value || "composite";
+  const days = $("bt-days").value || "250";
+  try {
+    const d = await api(`/api/stock/${currentCode}/backtest?strategy=${strategy}&days=${days}`);
+    if (currentCode === d.code) renderBacktest(d);
+  } catch (e) {
+    $("bt-summary").hidden = false;
+    $("bt-summary").innerHTML = `<div class="bt-err">回测失败：${e.message}</div>`;
+  }
+}
+$("bt-run").onclick = (e) => withBusy(e.currentTarget, runBacktest, "回测中…");
+
 /* ---------------- Boot ---------------- */
 $("add-btn").onclick = () => currentCode && addWatch(currentCode);
 initSearch();
+initBacktestStrategies();
 loadHealth();
 loadWatchlist();
 loadActiveModel();

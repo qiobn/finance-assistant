@@ -15,7 +15,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import data, db, intel, llm, storage, strategies
+from . import backtest, data, db, intel, llm, storage, strategies
 from .analysis import build_analysis, trend_overview
 from .indicators import compute_all
 
@@ -140,6 +140,17 @@ def _build_plan(code: str, days: int = 160, adjust: str = "qfq") -> dict:
 @app.get("/api/stock/{code}/plan")
 def stock_plan(code: str, days: int = Query(160, ge=30, le=500), adjust: str = "qfq") -> dict:
     return _build_plan(code, days, adjust)
+
+
+@app.get("/api/backtest/strategies")
+def backtest_strategies() -> dict:
+    return backtest.list_strategies()
+
+
+@app.get("/api/stock/{code}/backtest")
+def stock_backtest(code: str, strategy: str = Query("composite"),
+                   days: int = Query(250, ge=60, le=1000), adjust: str = "qfq") -> dict:
+    return backtest.run(code, strategy=strategy, days=days, adjust=adjust)
 
 
 def _compact(code: str, days: int = 120) -> dict:
