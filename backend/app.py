@@ -632,9 +632,9 @@ def get_portfolio() -> dict:
 
 @app.post("/api/portfolio")
 def upsert_portfolio(payload: dict = Body(...)) -> dict:
-    code = str(payload.get("code") or "").strip()
-    if not code:
-        raise HTTPException(status_code=400, detail="股票代码不能为空")
+    code = str(payload.get("code") or "").strip().zfill(6)
+    if not code or code == "000000" or not code.isdigit():
+        raise HTTPException(status_code=400, detail="请输入有效的 6 位代码")
     try:
         shares = float(payload.get("shares"))
         cost = float(payload.get("cost"))
@@ -642,6 +642,14 @@ def upsert_portfolio(payload: dict = Body(...)) -> dict:
         raise HTTPException(status_code=400, detail="数量与成本价必须是数字")
     if shares <= 0 or cost <= 0:
         raise HTTPException(status_code=400, detail="数量与成本价必须大于 0")
+    # 校验代码确实能取到真实行情，避免把无效代码/暂不支持的品种存成假数据
+    try:
+        c = _compact(code)
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"未找到 {code} 的行情数据，请检查代码是否正确")
+    if c.get("is_demo"):
+        raise HTTPException(status_code=404,
+                            detail=f"未取到 {code}（{c.get('name', code)}）的真实行情，可能是无效代码或暂不支持的品种，未保存")
     storage.upsert_position(code, shares, cost, str(payload.get("note") or ""))
     return get_portfolio()
 

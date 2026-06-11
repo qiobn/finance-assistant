@@ -72,6 +72,28 @@ def _stock_list() -> pd.DataFrame:
     return df[["code", "name"]]
 
 
+def _is_fund(code: str) -> bool:
+    """ETF / LOF 等场内基金代码：SH 5xxxxx、SZ 15xxxx/16xxxx（个股不会以这些开头）。"""
+    code = str(code).strip().zfill(6)
+    return code.startswith("5") or code[:2] in ("15", "16")
+
+
+@lru_cache(maxsize=1)
+def _fund_list() -> pd.DataFrame:
+    """场内 ETF 代码与名称，缓存于内存（best-effort，失败返回空表）。"""
+    if not AKSHARE_AVAILABLE:
+        return pd.DataFrame(columns=["code", "name"])
+    try:
+        df = _ak(ak.fund_etf_spot_em)
+        code_col = "代码" if "代码" in df.columns else df.columns[0]
+        name_col = "名称" if "名称" in df.columns else df.columns[1]
+        out = df[[code_col, name_col]].rename(columns={code_col: "code", name_col: "name"})
+        out["code"] = out["code"].astype(str).str.zfill(6)
+        return out[["code", "name"]]
+    except Exception:
+        return pd.DataFrame(columns=["code", "name"])
+
+
 def search_stocks(query: str, limit: int = 20) -> list[dict]:
     query = (query or "").strip()
     if not query:
@@ -80,11 +102,15 @@ def search_stocks(query: str, limit: int = 20) -> list[dict]:
         df = _stock_list()
     except Exception as exc:  # 列表拉取失败时退化为演示集合
         df = pd.DataFrame([{"code": c, "name": n} for c, n in DEMO_STOCKS.items()])
+    funds = _fund_list()
+    if not funds.empty:  # 把 ETF 一并纳入检索
+        df = pd.concat([df, funds], ignore_index=True)
     mask = df["code"].str.contains(query) | df["name"].str.contains(query)
     return df[mask].head(limit).to_dict("records")
 
 
 def name_for(code: str) -> str:
+    code = str(code).strip().zfill(6)
     try:
         df = _stock_list()
         hit = df[df["code"] == code]
@@ -92,6 +118,14 @@ def name_for(code: str) -> str:
             return str(hit.iloc[0]["name"])
     except Exception:
         pass
+    if _is_fund(code):  # ETF/LOF 名称
+        try:
+            funds = _fund_list()
+            hit = funds[funds["code"] == code]
+            if not hit.empty:
+                return str(hit.iloc[0]["name"])
+        except Exception:
+            pass
     return DEMO_STOCKS.get(code, code)
 
 
@@ -156,6 +190,35 @@ def _eastmoney_range(code: str, start: dt.date, end: dt.date, adjust: str) -> pd
     return None
 
 
+def _etf_range(code: str, start: dt.date, end: dt.date, adjust: str) -> pd.DataFrame | None:
+    """场内基金(ETF/LOF)日线：主源新浪（稳定、全量后过滤），备源东财。"""
+    # 场内基金交易所前缀：SH 基金以 5 开头，SZ 基金以 15/16 开头
+    sina_sym = ("sh" if code.startswith("5") else "sz") + code
+    try:
+        raw = _ak(ak.fund_etf_hist_sina, symbol=sina_sym)
+        if raw is not None and not raw.empty:
+            df = _normalize(raw)
+            return df[df["date"] >= start.strftime("%Y-%m-%d")].reset_index(drop=True)
+    except Exception:
+        pass
+    for attempt in range(2):
+        try:
+            raw = _ak(
+                ak.fund_etf_hist_em,
+                symbol=code, period="daily",
+                start_date=start.strftime("%Y%m%d"), end_date=end.strftime("%Y%m%d"),
+                adjust=adjust or "",
+            )
+            if raw is not None and not raw.empty:
+                return _normalize(
+                    raw.rename(columns={"日期": "date", "开盘": "open", "最高": "high",
+                                        "最低": "low", "收盘": "close", "成交量": "volume"})
+                )
+        except Exception:
+            time.sleep(0.6 * (attempt + 1))
+    return None
+
+
 def _sina_full(code: str, adjust: str) -> pd.DataFrame | None:
     try:
         raw = _ak(ak.stock_zh_a_daily, symbol=_sina_symbol(code), adjust=adjust or "qfq")
@@ -167,8 +230,10 @@ def _sina_full(code: str, adjust: str) -> pd.DataFrame | None:
 
 
 def _fetch_kline_from_source(code: str, adjust: str, start: dt.date) -> pd.DataFrame | None:
-    """主源（东财, 指定区间）→ 备源（新浪, 全量后过滤）。"""
+    """主源（东财, 指定区间）→ 备源（新浪, 全量后过滤）；ETF/LOF 走基金接口。"""
     end = dt.date.today()
+    if _is_fund(code):
+        return _etf_range(code, start, end, adjust)
     df = _eastmoney_range(code, start, end, adjust)
     if df is None or df.empty:
         df = _sina_full(code, adjust)
