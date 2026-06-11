@@ -494,6 +494,27 @@ def _digest_alerts(items: list[dict]) -> list[dict]:
     return alerts
 
 
+def _news_alerts(items: list[dict], news: list[dict]) -> list[dict]:
+    """新闻预警：自选股名字出现在『利好/利空』快讯标题里就提醒（用已缓存情绪，零额外成本）。"""
+    names = [(c["code"], c["name"]) for c in items if c.get("name") and len(c["name"]) >= 2]
+    alerts, seen = [], set()
+    for n in news:
+        sent = n.get("sentiment")
+        if sent not in ("利好", "利空"):
+            continue
+        title = n.get("title", "")
+        for code, name in names:
+            key = (code, title)
+            if name in title and key not in seen:
+                seen.add(key)
+                alerts.append({"code": code, "tone": "bullish" if sent == "利好" else "bearish",
+                               "text": f"{name} 相关{sent}消息：{title}"})
+    return alerts
+
+
+_TONE_PRIORITY = {"bearish": 0, "warning": 1, "bullish": 2, "neutral": 3}
+
+
 @app.get("/api/digest")
 def digest() -> dict:
     """每日复盘结构化数据（纯规则、免费）：大盘 + 自选股体检 + 提示 + 板块/快讯。"""
@@ -511,9 +532,11 @@ def digest() -> dict:
         sec = {"leaders": [], "laggards": []}
     try:
         news = intel.get_global_news(20)
-        news_top = (news.get("items") or [])[:8]
+        news_items = news.get("items") or []
     except Exception:
-        news_top = []
+        news_items = []
+    alerts = _digest_alerts(valid) + _news_alerts(valid, news_items)
+    alerts.sort(key=lambda a: _TONE_PRIORITY.get(a.get("tone"), 9))
     return {
         "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "market": {"indices": mk.get("indices", []), "breadth": mk.get("breadth", {}),
@@ -521,9 +544,11 @@ def digest() -> dict:
         "watchlist": valid,
         "top_up": list(reversed(movers))[:3],
         "top_down": movers[:3],
-        "alerts": _digest_alerts(valid),
+        "alerts": alerts,
+        "alert_count": len(alerts),
+        "risk_count": sum(1 for a in alerts if a.get("tone") in ("bearish", "warning")),
         "sectors": {"leaders": (sec.get("leaders") or [])[:6], "laggards": (sec.get("laggards") or [])[:4]},
-        "news": news_top,
+        "news": news_items[:8],
     }
 
 

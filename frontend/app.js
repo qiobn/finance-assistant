@@ -1040,8 +1040,29 @@ $("bt-run").onclick = (e) => withBusy(e.currentTarget, runBacktest, "回测中�
 
 /* ---------------- Daily Digest（晨报） ---------------- */
 const VTONE = { bullish: "bull", bearish: "bear", warning: "warn", neutral: "" };
+let _digestCache = null, _digestAt = 0;
+function updateDigestBadge(d) {
+  const el = $("digest-badge");
+  const risk = d.risk_count || 0, total = d.alert_count || 0;
+  if (!total) { el.hidden = true; return; }
+  el.hidden = false;
+  el.textContent = total;
+  el.classList.toggle("risk", risk > 0);
+  el.title = risk > 0 ? `${risk} 条风险提示，共 ${total} 条` : `${total} 条提示`;
+}
+async function fetchDigest(force) {
+  if (!force && _digestCache && Date.now() - _digestAt < 120000) return _digestCache;
+  const d = await api("/api/digest");
+  _digestCache = d; _digestAt = Date.now();
+  updateDigestBadge(d);
+  return d;
+}
 function renderDigest(d) {
-  $("digest-date").textContent = "数据时间：" + d.date + (d.market.is_demo ? "（大盘为演示数据）" : "");
+  updateDigestBadge(d);
+  const rk = d.risk_count || 0, tot = d.alert_count || 0;
+  $("digest-date").textContent = "数据时间：" + d.date +
+    (tot ? `　·　${tot} 条提示${rk ? `（含 ${rk} 条风险）` : ""}` : "") +
+    (d.market.is_demo ? "（大盘为演示数据）" : "");
 
   // 大盘
   const mk = d.market;
@@ -1086,11 +1107,10 @@ function renderDigest(d) {
     (lead || lag ? `<div class="dg-secs">${lead}${lag}</div>` : "") +
     (news || `<div class="muted">暂无快讯（或板块数据获取失败，可在「情报」页刷新）。</div>`);
 }
-async function loadDigest() {
+async function loadDigest(force) {
   $("digest-market").innerHTML = '<span class="loading-line"><span class="spin"></span>汇总今日数据…</span>';
   try {
-    const d = await api("/api/digest");
-    renderDigest(d);
+    renderDigest(await fetchDigest(force));
   } catch (e) {
     $("digest-market").innerHTML = `<span class="news-empty">加载失败：${e.message}</span>`;
   }
@@ -1117,7 +1137,7 @@ async function runDigestAi() {
     out.textContent = "调用失败：" + e.message;
   }
 }
-$("digest-refresh").onclick = (e) => withBusy(e.currentTarget, loadDigest, "刷新中…");
+$("digest-refresh").onclick = (e) => withBusy(e.currentTarget, () => loadDigest(true), "刷新中…");
 $("digest-ai-btn").onclick = (e) => withBusy(e.currentTarget, runDigestAi, "生成中…");
 
 /* ---------------- Portfolio（持仓） ---------------- */
@@ -1258,3 +1278,4 @@ initBacktestStrategies();
 loadHealth();
 loadWatchlist();
 loadActiveModel();
+setTimeout(() => fetchDigest().catch(() => {}), 2500);  // 后台预热晨报，点亮预警角标
