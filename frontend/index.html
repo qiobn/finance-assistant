@@ -121,6 +121,25 @@
         </section>
 
         <section class="analysis">
+          <div class="plan-head">
+            <h2>策略回测 <span class="plan-sub">用历史日线复现技术策略 · 本地计算 · 免费</span></h2>
+          </div>
+          <div class="bt-controls">
+            <select id="bt-strategy" class="bt-select"></select>
+            <select id="bt-days" class="bt-select">
+              <option value="120">近 120 交易日</option>
+              <option value="250" selected>近 250 交易日</option>
+              <option value="500">近 500 交易日</option>
+            </select>
+            <button id="bt-run" class="ai-btn">运行回测</button>
+          </div>
+          <div id="bt-summary" class="bt-summary" hidden></div>
+          <div id="bt-chart" class="bt-chart" hidden></div>
+          <div id="bt-trades" class="bt-trades"></div>
+          <p class="disclaimer">回测仅复现纯技术信号、含交易成本估计，存在幸存者偏差与过拟合风险，历史表现不代表未来。</p>
+        </section>
+
+        <section class="analysis">
           <h2>基本面</h2>
           <div id="fundamentals" class="funda">—</div>
         </section>
