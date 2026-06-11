@@ -62,9 +62,53 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS kline_access (
                 code TEXT PRIMARY KEY, last_access REAL
             );
+            CREATE TABLE IF NOT EXISTS news_sentiment (
+                hash       TEXT PRIMARY KEY,
+                sentiment  TEXT,
+                score      REAL,
+                sectors_json TEXT,
+                updated_at REAL
+            );
             """
         )
     _INITED = True
+
+
+# ---- 新闻情绪缓存（LLM 打标结果，按内容 hash 去重，避免重复消耗 token）----
+def get_news_sentiments(hashes: list[str]) -> dict[str, dict]:
+    if not hashes:
+        return {}
+    init_db()
+    out: dict[str, dict] = {}
+    with _conn() as conn:
+        qmarks = ",".join("?" * len(hashes))
+        rows = conn.execute(
+            f"SELECT hash, sentiment, score, sectors_json FROM news_sentiment WHERE hash IN ({qmarks})",
+            hashes,
+        ).fetchall()
+    for h, sent, score, sj in rows:
+        try:
+            sectors = json.loads(sj) if sj else []
+        except Exception:
+            sectors = []
+        out[h] = {"sentiment": sent, "score": score, "sectors": sectors}
+    return out
+
+
+def upsert_news_sentiments(items: list[dict]) -> None:
+    """items: [{hash, sentiment, score, sectors}]。"""
+    if not items:
+        return
+    init_db()
+    now = time.time()
+    rows = [(it["hash"], it.get("sentiment", "中性"), float(it.get("score", 0) or 0),
+             json.dumps(it.get("sectors", []), ensure_ascii=False), now) for it in items]
+    with _conn() as conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO news_sentiment (hash, sentiment, score, sectors_json, updated_at) "
+            "VALUES (?,?,?,?,?)",
+            rows,
+        )
 
 
 # ---- K 线 ----
