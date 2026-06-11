@@ -144,6 +144,7 @@ async function selectStock(code) {
   updateAddBtn();
   loadFundamentals(code);
   loadPlan(code);
+  loadStockNews(code);
 
   const cached = _stockMem.get(code);
   if (cached) renderStock(cached);   // 立即用缓存渲染（瞬开）
@@ -539,11 +540,81 @@ async function loadPlan(code) {
   }
 }
 
+/* ---------------- 情报（板块热度 + 财经快讯） ---------------- */
+function renderSectors(d) {
+  const box = $("sector-board");
+  const row = (s, dir) => {
+    const cls = s.pct >= 0 ? "up" : "down";
+    const col = s.pct >= 0 ? "var(--bear)" : "var(--bull)";
+    return `<div class="sec-row ${dir}">` +
+      `<span class="sec-name">${s.name}</span>` +
+      `<span class="sec-pct" style="color:${col}">${s.pct >= 0 ? "+" : ""}${s.pct}%</span>` +
+      `<span class="sec-leader">领涨 ${s.leader || "—"}</span></div>`;
+  };
+  const leaders = (d.leaders || []).map((s) => row(s, "lead")).join("");
+  const laggards = (d.laggards || []).map((s) => row(s, "lag")).join("");
+  box.innerHTML =
+    `<div class="sec-group"><div class="sec-head bull">领涨板块</div>${leaders || '<div class="news-empty">暂无</div>'}</div>` +
+    `<div class="sec-group"><div class="sec-head bear">领跌板块</div>${laggards || '<div class="news-empty">暂无</div>'}</div>`;
+}
+
+function renderNews(d) {
+  const box = $("news-stream");
+  const items = d.items || [];
+  if (!items.length) { box.innerHTML = '<div class="news-empty">暂无快讯（数据源可能临时不可用）。</div>'; return; }
+  box.innerHTML = items.map((n) => {
+    const tags = (n.sectors || []).map((s) => `<span class="news-tag">${s}</span>`).join("");
+    const title = n.url
+      ? `<a href="${n.url}" target="_blank" rel="noreferrer">${n.title}</a>` : n.title;
+    return `<div class="news-item"><div class="news-top"><span class="news-time">${n.time}</span>${tags}</div>` +
+      `<div class="news-title">${title}</div>` +
+      (n.summary ? `<div class="news-sum">${n.summary}</div>` : "") + "</div>";
+  }).join("");
+}
+
+async function loadIntel() {
+  const sb = $("sector-board");
+  const ns = $("news-stream");
+  if (!cacheGet("sectors")) sb.innerHTML = skeleton(2, "plan-skel");
+  if (!cacheGet("news")) ns.innerHTML = skeleton(3, "funda-skel");
+  try { await swr("sectors", "/api/sectors?kind=industry", (d) => renderSectors(d)); }
+  catch (e) { sb.innerHTML = `<span class="news-empty">板块加载失败：${e.message}</span>`; }
+  try { await swr("news", "/api/news?limit=40", (d) => renderNews(d)); }
+  catch (e) { ns.innerHTML = `<span class="news-empty">快讯加载失败：${e.message}</span>`; }
+}
+$("intel-refresh").onclick = loadIntel;
+
+function renderStockNews(d) {
+  const box = $("stock-news");
+  const items = (d && d.items) || [];
+  if (!items.length) { box.innerHTML = '<span class="news-empty">暂无相关新闻。</span>'; return; }
+  box.innerHTML = items.map((n) => {
+    const title = n.url ? `<a href="${n.url}" target="_blank" rel="noreferrer">${n.title}</a>` : n.title;
+    return `<div class="news-item"><div class="news-top"><span class="news-time">${n.time}</span>` +
+      (n.source ? `<span class="news-src">${n.source}</span>` : "") + "</div>" +
+      `<div class="news-title">${title}</div>` +
+      (n.summary ? `<div class="news-sum">${n.summary}</div>` : "") + "</div>";
+  }).join("");
+}
+
+async function loadStockNews(code) {
+  const box = $("stock-news");
+  if (!cacheGet("snews:" + code)) box.innerHTML = skeleton(2, "funda-skel");
+  try {
+    await swr("snews:" + code, `/api/stock/${code}/news?limit=8`, (d) => {
+      if (currentCode === code) renderStockNews(d);
+    });
+  } catch (e) {
+    box.innerHTML = `<span class="news-empty">新闻加载失败：${e.message}</span>`;
+  }
+}
+
 /* ---------------- View nav ---------------- */
 function switchView(view) {
   document.querySelectorAll(".nav-tab").forEach((t) => t.classList.toggle("active", t.dataset.view === view));
   document.querySelectorAll(".view").forEach((v) => (v.hidden = v.id !== "view-" + view));
   if (view === "market") loadMarket();
+  if (view === "intel") loadIntel();
   if (view === "overview") loadOverview();
   if (view === "scan") loadScanRules();
   if (view === "stock" && chart) setTimeout(() => chart.resize(), 50);

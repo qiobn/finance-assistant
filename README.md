@@ -10,6 +10,7 @@
 
 - **个股详情**：K线 + MA/BOLL、成交量、MACD/RSI/KDJ；自动生成中文「综合判断」与信号灯；估值/财务/资金流基本面面板。
 - **大盘**：上证/深成/创业板/科创50/沪深300/上证50 实时点位，全市场涨跌家数。
+- **情报**（消息面/事件驱动，Phase 1）：行业板块热度榜（领涨/领跌 + 领涨股）+ 财经快讯事件流（按行业板块名规则打标，零 token）；个股详情页展示「相关新闻」。定位为主题/板块研判，请结合价格与资金自行印证。
 - **自选总览**：把自选股列成「体检表」，一眼看涨跌与看多/看空/警示信号数量。
 - **选股扫描**：按规则（均线多头、MACD 金叉、RSI 超买超卖、放量、逼近布林下轨）筛股；范围支持**自选股 / 上证50 / 沪深300**；结果**流式输出**（边扫边出 + 进度）。
 - **AI 问答**：用大白话提问，系统自动识别问题里的股票并带上真实指标交给你的 LLM 作答。
@@ -95,6 +96,7 @@ backend/
   indicators.py   MA / MACD / RSI / 布林带 / KDJ
   analysis.py     规则化人话信号与风险提示（含多周期趋势）
   strategies.py   投资大师 Skills：买入区/止盈/止损/总体倾向（规则引擎）
+  intel.py        情报层：板块热度榜 + 财经快讯 + 个股新闻（规则打标，含重试）
   llm.py          OpenAI 兼容 LLM 客户端（多档配置、流式输出、投资偏好）
   storage.py      自选股 JSON 存储
 frontend/
@@ -123,6 +125,9 @@ data/                                （自动生成，已被 .gitignore 忽略�
 | GET | `/api/stock/{code}/plan` | 投资大师操作建议（买入区/止盈/止损/总体倾向） |
 | GET | `/api/watchlist`、POST/DELETE `/api/watchlist/{code}` | 自选股读取/增删 |
 | GET | `/api/market` | 大盘指数 + 全市场涨跌家数 |
+| GET | `/api/sectors?kind=industry` | 板块热度榜（领涨/领跌） |
+| GET | `/api/news?limit=40` | 财经快讯事件流（含板块标签） |
+| GET | `/api/stock/{code}/news` | 个股相关新闻 |
 | GET | `/api/overview` | 自选股总览（信号汇总） |
 | GET | `/api/scan/rules` | 可用筛选规则 |
 | POST | `/api/scan` | 选股扫描（一次性返回） |

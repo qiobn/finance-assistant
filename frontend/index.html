@@ -39,6 +39,7 @@
     <main class="main">
       <nav class="topnav">
         <button class="nav-tab" data-view="market">大盘</button>
+        <button class="nav-tab" data-view="intel">情报</button>
         <button class="nav-tab active" data-view="stock">个股详情</button>
         <button class="nav-tab" data-view="overview">自选总览</button>
         <button class="nav-tab" data-view="scan">选股扫描</button>
@@ -54,6 +55,25 @@
         <div id="market-indices" class="market-indices"></div>
         <div id="market-breadth" class="market-breadth"></div>
         <p class="scan-note">指数与涨跌家数来自公开行情，约 5 分钟刷新一次。</p>
+      </section>
+
+      <!-- ===== 情报（板块热度 + 财经快讯） ===== -->
+      <section id="view-intel" class="view" hidden>
+        <div class="view-head">
+          <h2>情报 <span class="plan-sub">板块热度 + 财经快讯 · 主题研判（非投资建议）</span></h2>
+          <button id="intel-refresh" class="add-btn">刷新</button>
+        </div>
+        <div class="intel-grid">
+          <div class="intel-col">
+            <div class="intel-title">行业板块热度榜</div>
+            <div id="sector-board" class="sector-board"></div>
+          </div>
+          <div class="intel-col">
+            <div class="intel-title">财经快讯</div>
+            <div id="news-stream" class="news-stream"></div>
+          </div>
+        </div>
+        <p class="scan-note">新闻按行业板块名做规则标签（零成本，可能有误差）；信息聚合、约 5 分钟刷新，请结合价格与资金自行印证。</p>
       </section>
 
       <!-- ===== 个股详情 ===== -->
@@ -99,6 +119,11 @@
         <section class="analysis">
           <h2>基本面</h2>
           <div id="fundamentals" class="funda">—</div>
+        </section>
+
+        <section class="analysis">
+          <h2>相关新闻 <span class="plan-sub">个股近期资讯（信息聚合，非投资建议）</span></h2>
+          <div id="stock-news" class="stock-news">—</div>
         </section>
 
         <section class="analysis">

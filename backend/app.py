@@ -15,7 +15,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import data, db, llm, storage, strategies
+from . import data, db, intel, llm, storage, strategies
 from .analysis import build_analysis, trend_overview
 from .indicators import compute_all
 
@@ -157,6 +157,22 @@ def _compact(code: str, days: int = 120) -> dict:
 def market() -> dict:
     """大盘指数 + 全市场涨跌家数。"""
     return data.get_index_overview()
+
+
+# ---- 情报：板块热度 + 财经快讯 + 个股新闻（Phase 1）----
+@app.get("/api/sectors")
+def sectors(kind: str = Query("industry")) -> dict:
+    return intel.get_sector_board(kind)
+
+
+@app.get("/api/news")
+def news(limit: int = Query(40, ge=5, le=100)) -> dict:
+    return intel.get_global_news(limit)
+
+
+@app.get("/api/stock/{code}/news")
+def stock_news(code: str, limit: int = Query(10, ge=1, le=30)) -> dict:
+    return intel.get_stock_news(code, limit)
 
 
 def _safe_compact(code: str) -> dict:
