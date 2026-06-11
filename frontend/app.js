@@ -36,6 +36,30 @@ function skeleton(n, cls) {
   return Array.from({ length: n }, () => `<div class="skel ${cls || ""}"></div>`).join("");
 }
 
+/* 按钮忙碌态：点击异步操作时显示转圈 + 文案，并禁用防重复点击 */
+function busyOn(btn, label) {
+  if (!btn || btn.dataset.busy === "1") return false;
+  btn.dataset.orig = btn.innerHTML;
+  btn.dataset.busy = "1";
+  btn.disabled = true;
+  btn.classList.add("is-busy");
+  btn.innerHTML = `<span class="spin"></span>${label || "处理中…"}`;
+  return true;
+}
+function busyOff(btn) {
+  if (!btn || btn.dataset.busy !== "1") return;
+  btn.disabled = false;
+  btn.classList.remove("is-busy");
+  btn.innerHTML = btn.dataset.orig || btn.innerHTML;
+  btn.dataset.busy = "";
+}
+async function withBusy(btn, fn, label) {
+  if (btn && btn.dataset.busy === "1") return;  // 正在进行中，忽略重复点击
+  busyOn(btn, label);
+  try { return await fn(); }
+  finally { busyOff(btn); }
+}
+
 /* ---------------- Health ---------------- */
 async function loadHealth() {
   try {
@@ -380,10 +404,8 @@ async function saveLlmConfig() {
 async function runAiAnalysis() {
   if (!currentCode) return;
   const out = $("ai-output");
-  const btn = $("ai-btn");
-  btn.disabled = true;
   out.classList.remove("placeholder");
-  out.textContent = "正在请求你的 LLM…";
+  out.innerHTML = '<span class="loading-line"><span class="spin"></span>正在请求你的 LLM，等待首个字…</span>';
   const pref = $("ai-pref") ? $("ai-pref").value : "balanced";
   try {
     const res = await fetch(`/api/stock/${currentCode}/ai/stream?days=160&pref=${pref}`, { method: "POST" });
@@ -397,10 +419,9 @@ async function runAiAnalysis() {
       out.textContent += decoder.decode(value, { stream: true });
       out.scrollTop = out.scrollHeight;
     }
+    if (!out.textContent.trim()) out.textContent = "（模型未返回内容，请重试或检查配置）";
   } catch (e) {
     out.textContent = "调用失败：" + e.message;
-  } finally {
-    btn.disabled = false;
   }
 }
 
@@ -408,7 +429,7 @@ $("llm-settings-btn").onclick = openModal;
 $("llm-close").onclick = closeModal;
 $("cfg-save").onclick = saveLlmConfig;
 $("cfg-reset").onclick = resetForm;
-$("ai-btn").onclick = runAiAnalysis;
+$("ai-btn").onclick = (e) => withBusy(e.currentTarget, runAiAnalysis, "生成中…");
 $("llm-modal").addEventListener("click", (e) => { if (e.target.id === "llm-modal") closeModal(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
 
@@ -533,10 +554,9 @@ function renderValuation(v) {
 async function runMasterAi(code, key, btn) {
   const out = btn.parentElement.querySelector(".pm-ai-out");
   out.hidden = false;
-  out.textContent = "正在请求你的 LLM…";
-  btn.disabled = true;
-  const oldText = btn.textContent;
-  btn.textContent = "解读中…";
+  out.innerHTML = '<span class="loading-line"><span class="spin"></span>正在请求你的 LLM…</span>';
+  if (!busyOn(btn, "解读中…")) return;
+  let ok = false;
   try {
     const res = await fetch(`/api/stock/${code}/master/${key}/ai/stream?days=160`, { method: "POST" });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
@@ -548,12 +568,13 @@ async function runMasterAi(code, key, btn) {
       if (done) break;
       out.textContent += decoder.decode(value, { stream: true });
     }
-    btn.textContent = "↻ 重新解读";
+    if (!out.textContent.trim()) out.textContent = "（模型未返回内容，请重试）";
+    ok = true;
   } catch (e) {
     out.textContent = "调用失败：" + e.message;
-    btn.textContent = oldText;
   } finally {
-    btn.disabled = false;
+    busyOff(btn);
+    if (ok) btn.innerHTML = "↻ 重新解读";
   }
 }
 
@@ -615,7 +636,9 @@ function renderNews(d) {
 
 async function runNewsSentiment() {
   const btn = $("news-sentiment-btn"); const bar = $("news-sentiment-bar");
-  const old = btn.textContent; btn.disabled = true; btn.textContent = "分析中…";
+  if (!busyOn(btn, "分析中…")) return;
+  bar.hidden = false;
+  bar.innerHTML = '<span class="loading-line"><span class="spin"></span>正在用 LLM 给快讯打标（约数十秒，结果会缓存）…</span>';
   try {
     const d = await api("/api/news/sentiment?limit=40&cap=24", { method: "POST" });
     if (d.is_demo) { bar.hidden = false; bar.innerHTML = '<span class="news-empty">数据源暂不可用，无法打标。</span>'; return; }
@@ -629,7 +652,7 @@ async function runNewsSentiment() {
       `<div class="sent-secs">板块情绪榜：${secs || "—"}</div>`;
   } catch (e) {
     bar.hidden = false; bar.innerHTML = `<span class="news-empty">打标失败：${e.message}</span>`;
-  } finally { btn.disabled = false; btn.textContent = old; }
+  } finally { busyOff(btn); }
 }
 $("news-sentiment-btn").onclick = runNewsSentiment;
 
@@ -643,7 +666,7 @@ async function loadIntel() {
   try { await swr("news", "/api/news?limit=40", (d) => renderNews(d)); }
   catch (e) { ns.innerHTML = `<span class="news-empty">快讯加载失败：${e.message}</span>`; }
 }
-$("intel-refresh").onclick = loadIntel;
+$("intel-refresh").onclick = (e) => withBusy(e.currentTarget, loadIntel, "刷新中…");
 
 function renderStockNews(d) {
   const box = $("stock-news");
@@ -662,8 +685,9 @@ async function runStockIntel() {
   if (!currentCode) return;
   const btn = $("stock-intel-btn"); const out = $("stock-intel-out");
   const pref = $("ai-pref") ? $("ai-pref").value : "balanced";
-  const old = btn.textContent; btn.disabled = true; btn.textContent = "分析中…";
-  out.hidden = false; out.textContent = "正在分析消息面…";
+  if (!busyOn(btn, "分析中…")) return;
+  out.hidden = false;
+  out.innerHTML = '<span class="loading-line"><span class="spin"></span>正在用 LLM 分析消息面（约数十秒）…</span>';
   try {
     const d = await api(`/api/stock/${currentCode}/intel?limit=8&pref=${pref}`, { method: "POST" });
     if (d.is_demo) { out.innerHTML = '<span class="news-empty">暂无足够新闻用于消息面分析。</span>'; return; }
@@ -674,7 +698,7 @@ async function runStockIntel() {
     out.innerHTML = head + `<div class="pm-ai-text">${(d.summary || "").replace(/\n/g, "<br>")}</div>`;
   } catch (e) {
     out.innerHTML = `<span class="news-empty">分析失败：${e.message}</span>`;
-  } finally { btn.disabled = false; btn.textContent = old; }
+  } finally { busyOff(btn); }
 }
 $("stock-intel-btn").onclick = runStockIntel;
 
@@ -749,7 +773,7 @@ async function loadMarket() {
     idxBox.innerHTML = `<span class="funda-empty">加载失败：${e.message}</span>`;
   }
 }
-$("mk-refresh").onclick = loadMarket;
+$("mk-refresh").onclick = (e) => withBusy(e.currentTarget, loadMarket, "刷新中…");
 
 /* ---------------- Overview ---------------- */
 function renderOverview(items) {
@@ -786,7 +810,7 @@ async function loadOverview() {
     grid.innerHTML = `<span class="funda-empty">加载失败：${e.message}</span>`;
   }
 }
-$("ov-refresh").onclick = loadOverview;
+$("ov-refresh").onclick = (e) => withBusy(e.currentTarget, loadOverview, "刷新中…");
 
 /* ---------------- Scanner ---------------- */
 let scanRulesLoaded = false;
@@ -818,6 +842,7 @@ function runScan() {
   const box = $("scan-results");
   if (!rules.length) { box.innerHTML = '<div class="scan-msg">请至少勾选一个规则。</div>'; return; }
   if (scanES) scanES.close();  // 关闭上一次未结束的流
+  busyOn($("scan-run"), "扫描中…");
 
   box.innerHTML = '<div class="scan-msg" id="scan-head">扫描中…<span id="scan-prog"></span></div><div id="scan-rows"></div>';
   const rows = $("scan-rows");
@@ -837,6 +862,7 @@ function runScan() {
   });
   es.addEventListener("done", (e) => {
     es.close(); scanES = null;
+    busyOff($("scan-run"));
     const d = JSON.parse(e.data);
     const info = d.pool_total
       ? `池 ${d.pool_total} 只，实扫 ${d.scanned} 只${d.failed ? `（${d.failed} 只取数失败已跳过）` : ""}`
@@ -846,6 +872,7 @@ function runScan() {
   });
   es.onerror = () => {
     es.close(); scanES = null;
+    busyOff($("scan-run"));
     if (!hits) { const head = $("scan-head"); if (head) head.textContent = "扫描中断（连接错误），请重试。"; }
   };
 }
@@ -890,8 +917,10 @@ async function sendChat() {
     thinking.textContent = "回答失败：" + e.message;
   }
 }
-$("chat-send").onclick = sendChat;
-$("chat-text").addEventListener("keydown", (e) => { if (e.key === "Enter") sendChat(); });
+$("chat-send").onclick = (e) => withBusy(e.currentTarget, sendChat, "发送中…");
+$("chat-text").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") withBusy($("chat-send"), sendChat, "发送中…");
+});
 
 /* ---------------- Boot ---------------- */
 $("add-btn").onclick = () => currentCode && addWatch(currentCode);
