@@ -332,6 +332,30 @@ def build_chat_messages(question: str, contexts: list[dict],
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
+def build_digest_messages(blocks: list[dict], pref: str = "balanced") -> list[dict]:
+    """每日复盘/晨报：把大盘/自选股/情报上下文写成大白话简报。"""
+    pref_name, pref_guide = _PREF_GUIDE.get(pref, _PREF_GUIDE["balanced"])
+    system = (
+        "你是用户的私人 A 股投研助理，为『不太懂股票』的用户写一份每日复盘/晨报。"
+        "要求：通俗中文、分小节、抓重点，少堆术语（必须用到时一句话解释）。"
+        "只能基于下方提供的数据作答，不要编造数字或个股名称；数据不足就直说。"
+        "保持客观中立、提示风险，强调这不是投资建议、技术指标有滞后性，"
+        "不要出现『一定涨/一定跌/满仓梭哈』之类的话。"
+        f"用户的投资偏好：{pref_name}——{pref_guide}"
+    )
+    parts = [f"【{b['label']}】\n{b['text']}" for b in (blocks or []) if b.get("text")]
+    body = "\n\n".join(parts) or "（今日暂无可用数据）"
+    user = (
+        "请根据下面今日数据写一份简短复盘，分四个小节，每节 2-4 句：\n"
+        "1）大盘综述：用指数与涨跌家数说明今天市场是偏暖还是偏冷；\n"
+        "2）自选股要点：逐只点出值得注意的（结合技术判断与涨跌幅），别全列；\n"
+        "3）板块与消息：领涨/领跌板块说明资金偏好，重要快讯讲清主题含义；\n"
+        "4）今日提示：需要留意的风险或机会，给『关注方向』而非买卖指令。\n\n"
+        f"今日数据：\n{body}"
+    )
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
 def _trends_text(stock: dict) -> str:
     t = stock.get("trends") or {}
     items = t.get("items") or {}

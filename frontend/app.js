@@ -733,9 +733,11 @@ async function loadStockNews(code) {
 function switchView(view) {
   document.querySelectorAll(".nav-tab").forEach((t) => t.classList.toggle("active", t.dataset.view === view));
   document.querySelectorAll(".view").forEach((v) => (v.hidden = v.id !== "view-" + view));
+  if (view === "digest") loadDigest();
   if (view === "market") loadMarket();
   if (view === "intel") loadIntel();
   if (view === "overview") loadOverview();
+  if (view === "portfolio") loadPortfolio();
   if (view === "scan") loadScanRules();
   if (view === "stock" && chart) setTimeout(() => chart.resize(), 50);
 }
@@ -1036,6 +1038,239 @@ async function runBacktest() {
 }
 $("bt-run").onclick = (e) => withBusy(e.currentTarget, runBacktest, "回测中…");
 
+/* ---------------- Daily Digest（晨报） ---------------- */
+const VTONE = { bullish: "bull", bearish: "bear", warning: "warn", neutral: "" };
+let _digestCache = null, _digestAt = 0;
+function updateDigestBadge(d) {
+  const el = $("digest-badge");
+  const risk = d.risk_count || 0, total = d.alert_count || 0;
+  if (!total) { el.hidden = true; return; }
+  el.hidden = false;
+  el.textContent = total;
+  el.classList.toggle("risk", risk > 0);
+  el.title = risk > 0 ? `${risk} 条风险提示，共 ${total} 条` : `${total} 条提示`;
+}
+async function fetchDigest(force) {
+  if (!force && _digestCache && Date.now() - _digestAt < 120000) return _digestCache;
+  const d = await api("/api/digest");
+  _digestCache = d; _digestAt = Date.now();
+  updateDigestBadge(d);
+  return d;
+}
+function renderDigest(d) {
+  updateDigestBadge(d);
+  const rk = d.risk_count || 0, tot = d.alert_count || 0;
+  $("digest-date").textContent = "数据时间：" + d.date +
+    (tot ? `　·　${tot} 条提示${rk ? `（含 ${rk} 条风险）` : ""}` : "") +
+    (d.market.is_demo ? "（大盘为演示数据）" : "");
+
+  // 大盘
+  const mk = d.market;
+  const idx = (mk.indices || []).map((i) => {
+    const up = i.pct >= 0;
+    return `<div class="dg-idx"><span>${i.name}</span><span class="${up ? "bull" : "bear"}">${i.price} (${up ? "+" : ""}${i.pct}%)</span></div>`;
+  }).join("");
+  const b = mk.breadth || {};
+  const breadth = b.up != null
+    ? `<div class="dg-breadth">全市场 <span class="bull">涨 ${b.up}</span> / <span class="bear">跌 ${b.down}</span>，涨停 ${b.limit_up ?? "-"} / 跌停 ${b.limit_down ?? "-"}</div>`
+    : "";
+  $("digest-market").innerHTML = (idx || "—") + breadth;
+
+  // 今日提示
+  const alerts = d.alerts || [];
+  $("digest-alerts").innerHTML = alerts.length
+    ? alerts.map((a) => `<div class="dg-alert ${VTONE[a.tone] || ""}">${a.text}</div>`).join("")
+    : `<div class="muted">自选股暂无明显异动或关键信号。</div>`;
+
+  // 自选股体检
+  const wl = d.watchlist || [];
+  $("digest-watch").innerHTML = wl.length
+    ? wl.map((c) => {
+        const up = (c.pct || 0) >= 0;
+        return `<div class="dg-row" data-code="${c.code}"><span class="dg-nm">${c.name}</span>` +
+          `<span class="dg-pct ${up ? "bull" : "bear"}">${up ? "+" : ""}${c.pct ?? "-"}%</span>` +
+          `<span class="dg-vd ${c.verdict_tone || ""}">${c.verdict || "-"}</span></div>`;
+      }).join("")
+    : `<div class="muted">自选股为空，去「个股详情」搜索并加入自选。</div>`;
+  $("digest-watch").querySelectorAll(".dg-row").forEach((r) =>
+    (r.onclick = () => { selectStock(r.dataset.code); switchView("stock"); }));
+
+  // 板块与快讯
+  const sec = d.sectors || {};
+  const lead = (sec.leaders || []).map((s) => `<span class="dg-sec bull">${s.name} +${s.pct}%</span>`).join("");
+  const lag = (sec.laggards || []).map((s) => `<span class="dg-sec bear">${s.name} ${s.pct}%</span>`).join("");
+  const news = (d.news || []).slice(0, 6).map((n) => {
+    const sent = n.sentiment && n.sentiment !== "中性" ? `<span class="dg-sent ${n.score > 0 ? "bull" : "bear"}">${n.sentiment}</span>` : "";
+    return `<div class="dg-news">${sent}${n.title}</div>`;
+  }).join("");
+  $("digest-intel").innerHTML =
+    (lead || lag ? `<div class="dg-secs">${lead}${lag}</div>` : "") +
+    (news || `<div class="muted">暂无快讯（或板块数据获取失败，可在「情报」页刷新）。</div>`);
+}
+async function loadDigest(force) {
+  $("digest-market").innerHTML = '<span class="loading-line"><span class="spin"></span>汇总今日数据…</span>';
+  try {
+    renderDigest(await fetchDigest(force));
+  } catch (e) {
+    $("digest-market").innerHTML = `<span class="news-empty">加载失败：${e.message}</span>`;
+  }
+}
+async function runDigestAi() {
+  const out = $("digest-ai-out");
+  out.classList.remove("placeholder");
+  out.innerHTML = '<span class="loading-line"><span class="spin"></span>正在请求你的 LLM，等待首个字…</span>';
+  const pref = $("digest-pref") ? $("digest-pref").value : "balanced";
+  try {
+    const res = await fetch(`/api/digest/ai/stream?pref=${pref}`, { method: "POST" });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    out.textContent = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      out.textContent += decoder.decode(value, { stream: true });
+      out.scrollTop = out.scrollHeight;
+    }
+    if (!out.textContent.trim()) out.textContent = "（模型未返回内容，请重试或检查配置）";
+  } catch (e) {
+    out.textContent = "调用失败：" + e.message;
+  }
+}
+$("digest-refresh").onclick = (e) => withBusy(e.currentTarget, () => loadDigest(true), "刷新中…");
+$("digest-ai-btn").onclick = (e) => withBusy(e.currentTarget, runDigestAi, "生成中…");
+
+/* ---------------- Portfolio（持仓） ---------------- */
+function renderPortfolio(d) {
+  const s = d.summary || {};
+  const pnlUp = (s.pnl || 0) >= 0;
+  $("pf-summary").innerHTML = s.count
+    ? `<div class="pf-sum-card"><span class="pf-sum-l">总市值</span><span class="pf-sum-v">${s.market_value}</span></div>` +
+      `<div class="pf-sum-card"><span class="pf-sum-l">总成本</span><span class="pf-sum-v">${s.cost_value}</span></div>` +
+      `<div class="pf-sum-card"><span class="pf-sum-l">总盈亏</span><span class="pf-sum-v ${pnlUp ? "up" : "down"}">${pnlUp ? "+" : ""}${s.pnl}</span></div>` +
+      `<div class="pf-sum-card"><span class="pf-sum-l">盈亏比例</span><span class="pf-sum-v ${pnlUp ? "up" : "down"}">${pnlUp ? "+" : ""}${s.pnl_pct}%</span></div>`
+    : `<div class="muted">还没有持仓记录，用下方表单添加你买入的股票（代码 / 数量 / 成本价）。</div>`;
+
+  const items = d.items || [];
+  if (!items.length) { $("pf-table").innerHTML = ""; return; }
+  $("pf-table").innerHTML =
+    `<table class="pf-tbl"><thead><tr><th>名称</th><th>现价</th><th>成本</th><th>数量</th><th>市值</th><th>盈亏</th><th>盈亏%</th><th>占比</th><th>技术判断</th><th>提示</th><th></th></tr></thead><tbody>` +
+    items.map((it) => {
+      if (it.price == null) {
+        return `<tr><td class="pf-nm" data-code="${it.code}">${it.name}<span class="pf-cd">${it.code}</span></td>` +
+          `<td colspan="9" class="muted">取价失败：${it.error || "无数据"}</td>` +
+          `<td><button class="pf-del" data-code="${it.code}">✕</button></td></tr>`;
+      }
+      const up = (it.pnl || 0) >= 0;
+      return `<tr><td class="pf-nm" data-code="${it.code}">${it.name}<span class="pf-cd">${it.code}</span></td>` +
+        `<td>${it.price}</td><td>${it.cost}</td><td>${it.shares}</td><td>${it.market_value}</td>` +
+        `<td class="${up ? "up" : "down"}">${up ? "+" : ""}${it.pnl}</td>` +
+        `<td class="${up ? "up" : "down"}">${up ? "+" : ""}${it.pnl_pct}%</td>` +
+        `<td>${it.weight ?? "-"}%</td>` +
+        `<td class="pf-vd ${it.verdict_tone || ""}">${it.verdict || "-"}</td>` +
+        `<td class="pf-tip ${it.tip ? it.tip.tone : ""}">${it.tip ? it.tip.text : "-"}</td>` +
+        `<td><button class="pf-del" data-code="${it.code}">✕</button></td></tr>`;
+    }).join("") + `</tbody></table>`;
+
+  $("pf-table").querySelectorAll(".pf-nm").forEach((el) =>
+    (el.onclick = () => { selectStock(el.dataset.code); switchView("stock"); }));
+  $("pf-table").querySelectorAll(".pf-del").forEach((b) =>
+    (b.onclick = async () => { renderPortfolio(await api(`/api/portfolio/${b.dataset.code}`, { method: "DELETE" })); }));
+}
+async function loadPortfolio() {
+  $("pf-summary").innerHTML = '<span class="loading-line"><span class="spin"></span>计算盈亏…</span>';
+  try {
+    renderPortfolio(await api("/api/portfolio"));
+  } catch (e) {
+    $("pf-summary").innerHTML = `<span class="news-empty">加载失败：${e.message}</span>`;
+  }
+}
+async function savePosition() {
+  const code = $("pf-code").value.trim();
+  const shares = $("pf-shares").value;
+  const cost = $("pf-cost").value;
+  if (!code || !shares || !cost) return;
+  try {
+    const d = await api("/api/portfolio", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, shares: Number(shares), cost: Number(cost) }),
+    });
+    $("pf-code").value = ""; $("pf-shares").value = ""; $("pf-cost").value = "";
+    renderPortfolio(d);
+  } catch (e) {
+    $("pf-summary").innerHTML = `<span class="news-empty">保存失败：${e.message}</span>`;
+  }
+}
+$("pf-refresh").onclick = (e) => withBusy(e.currentTarget, loadPortfolio, "刷新中…");
+$("pf-form").addEventListener("submit", (e) => { e.preventDefault(); withBusy($("pf-add"), savePosition, "保存中…"); });
+
+/* ---------------- Glossary（名词解释） ---------------- */
+const GLOSSARY = [
+  ["技术指标", [
+    ["均线 / MA", "把最近 N 天收盘价做平均连成的线（MA20=近20天均价）。价格在均线上方偏强，下方偏弱。"],
+    ["多头排列 / 空头排列", "短期均线在上、长期在下叫多头排列（趋势向上）；反过来叫空头排列（趋势向下）。"],
+    ["MACD / 金叉 / 死叉", "衡量动能强弱的指标。快线上穿慢线叫『金叉』（动能转强），下穿叫『死叉』（动能转弱）。"],
+    ["RSI / 超买 / 超卖", "0-100 衡量涨跌力度。≥70 叫『超买』（短期涨多了，追高有风险），≤30 叫『超卖』（跌多了，可能反弹）。"],
+    ["布林带 / BOLL", "价格的『弹性通道』。贴近上轨表示偏高，贴近下轨表示偏低，中轨是近期均价。"],
+    ["KDJ", "另一种衡量超买超卖与转折的指标，与 RSI 类似，常一起参考。"],
+    ["量能 / 放量 / 缩量", "成交量大小。比平时明显放大叫『放量』，明显萎缩叫『缩量』，放量上涨通常更有说服力。"],
+    ["多周期共振", "日线、周线、月线方向一致（都向上或都向下），信号更可靠；方向打架则要谨慎。"],
+  ]],
+  ["估值 / 基本面", [
+    ["市盈率 / PE", "股价 ÷ 每股盈利。大致表示『按现在的赚钱速度，多少年回本』，越低通常越便宜（但要看行业）。"],
+    ["市净率 / PB", "股价 ÷ 每股净资产。低于 1 表示股价低于账面净资产，常见于银行地产。"],
+    ["ROE / 净资产收益率", "公司用自有资本赚钱的效率，长期高 ROE（如 >15%）通常是好生意。"],
+    ["历史分位", "当前估值在过去几年里处于高位还是低位。如『PE 近五年 20% 分位』表示比过去 80% 的时间都便宜。"],
+    ["合理估值锚 / 安全边际", "用多种方法估算的『合理价区间』。现价比合理价低得越多，安全边际越高，越有保护。"],
+    ["主力净流入", "估算的大资金当日净买入额，正值表示大资金在买，仅作参考、非绝对。"],
+  ]],
+  ["操作 / 大师建议", [
+    ["买入区 / 止盈位 / 止损位", "建议关注的买入价格区间；涨到止盈位可考虑分批卖出锁利；跌破止损位应离场控制亏损。"],
+    ["多空分 / 置信度", "每位大师给的偏多偏空打分(0-100)与他对这个判断的把握程度(%)。"],
+    ["委员会 / 分歧度", "把多位大师按置信度加权汇总成总体倾向；分歧度高表示大师们看法不一致，应降低仓位。"],
+    ["仓位", "你投入这只股票的资金占总资金的比例。控制仓位是控制风险的核心。"],
+  ]],
+  ["回测指标", [
+    ["回测", "用历史数据模拟『如果当时按这个策略买卖，结果会怎样』，检验策略靠不靠谱。"],
+    ["买入持有基准", "什么都不操作、一直拿着的收益，用来对比策略是否真的更好。"],
+    ["超额收益", "策略收益减去买入持有收益。为正才说明择时带来了价值。"],
+    ["最大回撤", "从最高点到最低点的最大跌幅，衡量『最难受时亏多少』，越小越稳。"],
+    ["胜率", "盈利的交易笔数占比。高胜率不等于高收益，还要看每笔赚多赔少。"],
+    ["夏普比率", "每承担一份波动风险换来的收益，越高表示性价比越好（>1 较好）。"],
+    ["持仓占比", "回测期间真正持有股票的时间比例，太低说明大部分时间空仓。"],
+  ]],
+  ["情报 / 情绪", [
+    ["利好 / 利空 / 中性", "消息对股价的潜在影响方向：利好偏正面、利空偏负面、中性无明显倾向。"],
+    ["板块 / 题材", "同类公司的集合（如新能源、半导体）。资金常按板块轮动，领涨板块反映当下偏好。"],
+    ["情绪打分", "用 AI 给新闻判利好/利空并打分，汇总出板块情绪，仅作主题研判参考。"],
+  ]],
+];
+function renderGlossary(filter) {
+  const q = (filter || "").trim().toLowerCase();
+  const box = $("glossary-body");
+  let html = "";
+  GLOSSARY.forEach(([cat, items]) => {
+    const matched = items.filter(([t, d]) => !q || t.toLowerCase().includes(q) || d.toLowerCase().includes(q));
+    if (!matched.length) return;
+    html += `<div class="gl-cat">${cat}</div>`;
+    matched.forEach(([t, d]) => {
+      html += `<div class="gl-item"><div class="gl-term">${t}</div><div class="gl-def">${d}</div></div>`;
+    });
+  });
+  box.innerHTML = html || `<div class="muted">没有找到匹配的术语。</div>`;
+}
+function openGlossary() {
+  $("glossary-search").value = "";
+  renderGlossary("");
+  $("glossary-modal").hidden = false;
+}
+function closeGlossary() { $("glossary-modal").hidden = true; }
+$("glossary-btn").onclick = openGlossary;
+$("glossary-close").onclick = closeGlossary;
+$("glossary-search").addEventListener("input", (e) => renderGlossary(e.target.value));
+$("glossary-modal").addEventListener("click", (e) => { if (e.target.id === "glossary-modal") closeGlossary(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("glossary-modal").hidden) closeGlossary(); });
+
 /* ---------------- Boot ---------------- */
 $("add-btn").onclick = () => currentCode && addWatch(currentCode);
 initSearch();
@@ -1043,3 +1278,4 @@ initBacktestStrategies();
 loadHealth();
 loadWatchlist();
 loadActiveModel();
+setTimeout(() => fetchDigest().catch(() => {}), 2500);  // 后台预热晨报，点亮预警角标

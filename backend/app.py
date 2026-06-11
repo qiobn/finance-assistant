@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -465,6 +466,200 @@ def chat(payload: dict = Body(...)) -> dict:
         "used": [{"code": c["code"], "name": c["name"]} for c in contexts],
         "sources_used": [b["label"] for b in extras],
     }
+
+
+# ---- 每日复盘 / 晨报 ----
+def _digest_alerts(items: list[dict]) -> list[dict]:
+    """从自选股技术信号派生『今日提示』（纯规则、零成本）。"""
+    alerts = []
+    for c in items:
+        if c.get("error"):
+            continue
+        name, code, pct = c.get("name"), c.get("code"), c.get("pct")
+        if pct is not None and abs(pct) >= 5:
+            alerts.append({"code": code, "tone": "bullish" if pct > 0 else "bearish",
+                           "text": f"{name} 今日{'大涨' if pct > 0 else '大跌'} {pct}%，注意波动"})
+        for s in c.get("signals", []):
+            dim, lab = s.get("dim"), s.get("label", "")
+            if dim == "RSI" and "超买" in lab:
+                alerts.append({"code": code, "tone": "warning", "text": f"{name} {lab}，短期追高风险偏大"})
+            elif dim == "RSI" and "超卖" in lab:
+                alerts.append({"code": code, "tone": "bullish", "text": f"{name} {lab}，关注超跌反弹机会"})
+            elif dim == "MACD" and "金叉" in lab:
+                alerts.append({"code": code, "tone": "bullish", "text": f"{name} MACD {lab}，动能转强"})
+            elif dim == "MACD" and "死叉" in lab:
+                alerts.append({"code": code, "tone": "bearish", "text": f"{name} MACD {lab}，动能转弱"})
+        if c.get("verdict_tone") == "bearish":
+            alerts.append({"code": code, "tone": "bearish", "text": f"{name} 技术面：{c.get('verdict')}"})
+    return alerts
+
+
+def _news_alerts(items: list[dict], news: list[dict]) -> list[dict]:
+    """新闻预警：自选股名字出现在『利好/利空』快讯标题里就提醒（用已缓存情绪，零额外成本）。"""
+    names = [(c["code"], c["name"]) for c in items if c.get("name") and len(c["name"]) >= 2]
+    alerts, seen = [], set()
+    for n in news:
+        sent = n.get("sentiment")
+        if sent not in ("利好", "利空"):
+            continue
+        title = n.get("title", "")
+        for code, name in names:
+            key = (code, title)
+            if name in title and key not in seen:
+                seen.add(key)
+                alerts.append({"code": code, "tone": "bullish" if sent == "利好" else "bearish",
+                               "text": f"{name} 相关{sent}消息：{title}"})
+    return alerts
+
+
+_TONE_PRIORITY = {"bearish": 0, "warning": 1, "bullish": 2, "neutral": 3}
+
+
+@app.get("/api/digest")
+def digest() -> dict:
+    """每日复盘结构化数据（纯规则、免费）：大盘 + 自选股体检 + 提示 + 板块/快讯。"""
+    codes = storage.load()
+    items = list(_EXEC.map(_safe_compact, codes)) if codes else []
+    valid = [c for c in items if not c.get("error")]
+    movers = sorted(valid, key=lambda c: (c.get("pct") if c.get("pct") is not None else 0))
+    try:
+        mk = data.get_index_overview()
+    except Exception:
+        mk = {"indices": [], "breadth": {}}
+    try:
+        sec = intel.get_sector_board("industry")
+    except Exception:
+        sec = {"leaders": [], "laggards": []}
+    try:
+        news = intel.get_global_news(20)
+        news_items = news.get("items") or []
+    except Exception:
+        news_items = []
+    alerts = _digest_alerts(valid) + _news_alerts(valid, news_items)
+    alerts.sort(key=lambda a: _TONE_PRIORITY.get(a.get("tone"), 9))
+    return {
+        "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "market": {"indices": mk.get("indices", []), "breadth": mk.get("breadth", {}),
+                   "is_demo": mk.get("is_demo", False)},
+        "watchlist": valid,
+        "top_up": list(reversed(movers))[:3],
+        "top_down": movers[:3],
+        "alerts": alerts,
+        "alert_count": len(alerts),
+        "risk_count": sum(1 for a in alerts if a.get("tone") in ("bearish", "warning")),
+        "sectors": {"leaders": (sec.get("leaders") or [])[:6], "laggards": (sec.get("laggards") or [])[:4]},
+        "news": news_items[:8],
+    }
+
+
+@app.post("/api/digest/ai/stream")
+def digest_ai_stream(pref: str = Query("balanced")):
+    """用 LLM 把今日大盘/自选股/情报写成一份大白话复盘（流式，消耗 token）。"""
+    blocks = _build_context_blocks(["market", "watchlist", "intel"])
+
+    def gen():
+        try:
+            for piece in llm.chat_stream(llm.build_digest_messages(blocks, pref)):
+                yield piece
+        except llm.LLMError as exc:
+            yield f"\n[错误] {exc}"
+
+    return StreamingResponse(gen(), media_type="text/plain; charset=utf-8")
+
+
+# ---- 持仓与盈亏 ----
+def _position_note(pnl_pct: float, verdict_tone: str) -> dict:
+    """根据浮盈浮亏 + 技术倾向给出『提示』（非投资建议）。"""
+    profit = pnl_pct >= 0
+    if verdict_tone == "bearish":
+        if profit:
+            return {"tone": "warning", "text": "技术面转弱、当前有浮盈：可考虑分批止盈、落袋为安。"}
+        return {"tone": "bearish", "text": "技术面转弱且浮亏：注意风险、设好止损，避免越亏越补。"}
+    if verdict_tone == "bullish":
+        if profit:
+            return {"tone": "bullish", "text": "趋势仍偏强、浮盈中：可继续持有或上移止盈位锁定利润。"}
+        return {"tone": "neutral", "text": "趋势偏强但你成本偏高：可观察企稳信号，不必急于补仓。"}
+    if verdict_tone == "warning":
+        return {"tone": "warning", "text": "信号矛盾/高位震荡：控制仓位，不宜追加。"}
+    return {"tone": "neutral", "text": "方向不明：按计划持有，等更清晰的信号。"}
+
+
+def _eval_position(pos: dict) -> dict:
+    code = str(pos.get("code", "")).zfill(6)
+    shares = float(pos.get("shares") or 0)
+    cost = float(pos.get("cost") or 0)
+    out = {"code": code, "name": data.name_for(code), "shares": shares, "cost": cost,
+           "note_user": pos.get("note", "")}
+    try:
+        c = _compact(code)
+        rt = data.latest_price(code)  # 实时价优先，避免用昨日收盘当现价
+        price = rt if rt else c["close"]
+        out.update({"price": price, "realtime": rt is not None,
+                    "verdict": c["verdict"], "verdict_tone": c["verdict_tone"]})
+    except Exception as exc:
+        out.update({"price": None, "error": str(exc)[:60]})
+        return out
+    mv = price * shares
+    cv = cost * shares
+    pnl = mv - cv
+    pnl_pct = (price / cost - 1) * 100 if cost > 0 else 0.0
+    out.update({
+        "market_value": round(mv, 2), "cost_value": round(cv, 2),
+        "pnl": round(pnl, 2), "pnl_pct": round(pnl_pct, 2),
+        "tip": _position_note(pnl_pct, c["verdict_tone"]),
+    })
+    return out
+
+
+@app.get("/api/portfolio")
+def get_portfolio() -> dict:
+    positions = storage.load_positions()
+    items = list(_EXEC.map(_eval_position, positions)) if positions else []
+    valid = [it for it in items if it.get("price") is not None]
+    total_mv = sum(it["market_value"] for it in valid)
+    total_cv = sum(it["cost_value"] for it in valid)
+    total_pnl = total_mv - total_cv
+    for it in valid:  # 仓位占比（按市值）
+        it["weight"] = round(it["market_value"] / total_mv * 100, 1) if total_mv else 0.0
+    return {
+        "items": items,
+        "summary": {
+            "market_value": round(total_mv, 2), "cost_value": round(total_cv, 2),
+            "pnl": round(total_pnl, 2),
+            "pnl_pct": round((total_mv / total_cv - 1) * 100, 2) if total_cv else 0.0,
+            "count": len(valid),
+        },
+    }
+
+
+@app.post("/api/portfolio")
+def upsert_portfolio(payload: dict = Body(...)) -> dict:
+    code = str(payload.get("code") or "").strip().zfill(6)
+    if not code or code == "000000" or not code.isdigit():
+        raise HTTPException(status_code=400, detail="请输入有效的 6 位代码")
+    try:
+        shares = float(payload.get("shares"))
+        cost = float(payload.get("cost"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="数量与成本价必须是数字")
+    if shares <= 0 or cost <= 0:
+        raise HTTPException(status_code=400, detail="数量与成本价必须大于 0")
+    # 校验代码确实能取到真实行情，避免把无效代码/暂不支持的品种存成假数据
+    try:
+        c = _compact(code)
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"未找到 {code} 的行情数据，请检查代码是否正确")
+    if c.get("is_demo"):
+        raise HTTPException(status_code=404,
+                            detail=f"未取到 {code}（{c.get('name', code)}）的真实行情，可能是无效代码或暂不支持的品种，未保存")
+    storage.upsert_position(code, shares, cost, str(payload.get("note") or ""))
+    return get_portfolio()
+
+
+@app.delete("/api/portfolio/{code}")
+def delete_portfolio(code: str) -> dict:
+    storage.remove_position(code)
+    return get_portfolio()
 
 
 # ---- LLM 接入：多档配置管理 + 切换 ----

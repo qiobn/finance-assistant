@@ -32,19 +32,62 @@
       <div class="sidebar-foot">
         <span id="health-dot" class="dot"></span>
         <span id="health-text">连接中…</span>
+        <button id="glossary-btn" class="gear" title="名词解释 / 新手必读">❓ 术语</button>
         <button id="llm-settings-btn" class="gear" title="AI 设置">⚙ AI</button>
       </div>
     </aside>
 
     <main class="main">
       <nav class="topnav">
+        <button class="nav-tab" data-view="digest">晨报 <span id="digest-badge" class="nav-badge" hidden></span></button>
         <button class="nav-tab" data-view="market">大盘</button>
         <button class="nav-tab" data-view="intel">情报</button>
         <button class="nav-tab active" data-view="stock">个股详情</button>
         <button class="nav-tab" data-view="overview">自选总览</button>
+        <button class="nav-tab" data-view="portfolio">持仓</button>
         <button class="nav-tab" data-view="scan">选股扫描</button>
         <button class="nav-tab" data-view="chat">AI 问答</button>
       </nav>
+
+      <!-- ===== 每日复盘 / 晨报 ===== -->
+      <section id="view-digest" class="view" hidden>
+        <div class="view-head">
+          <h2>每日复盘 <span class="plan-sub">大盘 + 自选股 + 情报汇成一页 · 结构化部分免费</span></h2>
+          <button id="digest-refresh" class="add-btn">刷新</button>
+        </div>
+        <div id="digest-date" class="digest-date"></div>
+        <div class="digest-grid">
+          <div class="digest-card">
+            <div class="digest-h">📈 大盘</div>
+            <div id="digest-market" class="digest-body">—</div>
+          </div>
+          <div class="digest-card">
+            <div class="digest-h">⚠️ 今日提示 <span class="digest-h-sub">规则派生，仅供留意</span></div>
+            <div id="digest-alerts" class="digest-body">—</div>
+          </div>
+          <div class="digest-card">
+            <div class="digest-h">📌 自选股体检</div>
+            <div id="digest-watch" class="digest-body">—</div>
+          </div>
+          <div class="digest-card">
+            <div class="digest-h">🧠 板块与快讯</div>
+            <div id="digest-intel" class="digest-body">—</div>
+          </div>
+        </div>
+        <section class="analysis ai-section">
+          <div class="ai-head">
+            <h2>AI 复盘 <span class="plan-sub">用你的大模型把今天讲成人话 · 消耗 token</span></h2>
+            <select id="digest-pref" class="ai-pref" title="投资偏好">
+              <option value="balanced">均衡</option>
+              <option value="short">短线收益</option>
+              <option value="long">长期持有</option>
+            </select>
+            <button id="digest-ai-btn" class="ai-btn">📝 生成今日复盘</button>
+          </div>
+          <div id="digest-ai-out" class="ai-output placeholder">点上方「生成今日复盘」，由你接入的大模型基于今日数据写一份大白话简报。</div>
+        </section>
+        <p class="scan-note">结构化卡片为本地规则汇总（免费）；点「生成今日复盘」才调用大模型（消耗 token）。所有内容仅供研究，非投资建议。</p>
+      </section>
 
       <!-- ===== 大盘 ===== -->
       <section id="view-market" class="view" hidden>
@@ -77,6 +120,23 @@
           </div>
         </div>
         <p class="scan-note">新闻按行业板块名做规则标签（零成本，可能有误差）；点「AI 情绪打标」才会消耗 token（结果按内容缓存，重复几乎免费）；信息聚合、约 5 分钟刷新，请结合价格与资金自行印证。</p>
+      </section>
+
+      <!-- ===== 持仓 ===== -->
+      <section id="view-portfolio" class="view" hidden>
+        <div class="view-head">
+          <h2>我的持仓 <span class="plan-sub">本地记录成本与数量 · 实时盈亏 + 持仓提示（非投资建议）</span></h2>
+          <button id="pf-refresh" class="add-btn">刷新</button>
+        </div>
+        <div id="pf-summary" class="pf-summary"></div>
+        <form id="pf-form" class="pf-form" autocomplete="off">
+          <input id="pf-code" class="pf-in" type="text" placeholder="代码 如 600519" maxlength="6" />
+          <input id="pf-shares" class="pf-in" type="number" step="any" min="0" placeholder="持有数量(股)" />
+          <input id="pf-cost" class="pf-in" type="number" step="any" min="0" placeholder="成本价(元)" />
+          <button id="pf-add" class="ai-btn" type="submit">保存持仓</button>
+        </form>
+        <div id="pf-table" class="pf-table">—</div>
+        <p class="scan-note">数据仅保存在本地 <code>data/positions.json</code>；现价与技术判断来自公开行情、约 5 分钟刷新。提示为规则派生，<b>不构成投资建议</b>。</p>
       </section>
 
       <!-- ===== 个股详情 ===== -->
@@ -264,6 +324,18 @@
           <li><b>本地 Ollama</b>：base <code>http://localhost:11434/v1</code> · model <code>qwen2.5</code> · key 随便填</li>
         </ul>
       </details>
+    </div>
+  </div>
+
+  <div id="glossary-modal" class="modal" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3>名词解释 · 新手必读</h3>
+        <button id="glossary-close" class="modal-close">×</button>
+      </div>
+      <p class="modal-tip">看不懂某个词？这里用大白话解释本工具里出现的指标与说法。本工具仅供学习研究，<b>不构成投资建议</b>。</p>
+      <input id="glossary-search" class="glossary-search" type="text" placeholder="搜索术语，如 MACD、市盈率、止损…" autocomplete="off" />
+      <div id="glossary-body" class="glossary-body"></div>
     </div>
   </div>
 
