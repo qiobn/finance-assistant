@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from . import valuation
+
 
 def _f(v) -> float | None:
     """尽量把各种类型（含 '12.3%' 字符串）转成 float。"""
@@ -129,42 +131,69 @@ def _trend_master(df: pd.DataFrame, trends: dict, lv: dict) -> dict:
             "take_profit": take_profit, "stop_loss": stop, "reason": reason}
 
 
-def _value_master(df: pd.DataFrame, funda: dict | None, lv: dict) -> dict:
-    """价值/逆向（格雷厄姆·巴菲特·Burry）：用近五年估值分位判断便宜与否。"""
+def _value_master(df: pd.DataFrame, funda: dict | None, lv: dict, val: dict | None = None) -> dict:
+    """价值/逆向（格雷厄姆·巴菲特·Burry）：近五年估值分位 + 多法合理价/安全边际。"""
     base = {"key": "value", "name": "价值 / 逆向（格雷厄姆·巴菲特）", "horizon": "中长线"}
     v = (funda or {}).get("valuation") or {}
-    pe, pe_pct = _f(v.get("pe_ttm")), _f(v.get("pe_ttm_pct"))
-    pb, pb_pct = _f(v.get("pb")), _f(v.get("pb_pct"))
+    pe_pct = _f(v.get("pe_ttm_pct"))
+    pb_pct = _f(v.get("pb_pct"))
     pcts = [p for p in (pe_pct, pb_pct) if p is not None]
+    close, recent_low = lv["close"], lv["recent_low"]
+    vtext = valuation.short_text(val)
+    mos = _f((val or {}).get("mos"))          # 安全边际%（正=低估）
+    verdict = (val or {}).get("verdict")
+
+    # 估值分位缺失时，用多法合理价的安全边际兜底判断
     if not pcts:
+        if mos is not None:
+            if verdict == "低估":
+                return {**base, "action": "多法估值低估，可分批", "tone": "bullish",
+                        "buy_zone": _zone(recent_low, close), "take_profit": None,
+                        "stop_loss": _round(close * 0.85) if close else None,
+                        "reason": f"无分位数据，但{vtext}有安全边际，价值派可分批买、基本面恶化才离场。"}
+            if verdict == "高估":
+                return {**base, "action": "多法估值偏高，不买", "tone": "bearish",
+                        "buy_zone": None, "take_profit": None, "stop_loss": None,
+                        "reason": f"无分位数据；{vtext}缺乏安全边际，价值派此时不追。"}
+            return {**base, "action": "估值中性，耐心等", "tone": "neutral",
+                    "buy_zone": None, "take_profit": None, "stop_loss": None,
+                    "reason": f"{vtext}估值不便宜也不贵，价值派等更明显的低估。"}
         return {**base, "action": "数据不足", "tone": "neutral", "buy_zone": None,
                 "take_profit": None, "stop_loss": None,
-                "reason": "暂无近五年 PE/PB 分位数据，价值视角无法判断便宜与否（亏损股估值也会失真）。"}
+                "reason": "暂无近五年 PE/PB 分位与估值数据，价值视角无法判断（亏损股估值也会失真）。"}
+
     low = min(pcts)
-    close, recent_low = lv["close"], lv["recent_low"]
     tag = " / ".join(filter(None, [
         f"PE分位{pe_pct:.0f}%" if pe_pct is not None else None,
         f"PB分位{pb_pct:.0f}%" if pb_pct is not None else None,
     ]))
+    suffix = (" " + vtext) if vtext else ""
     if low <= 20:
-        buy_zone = _zone(recent_low, close)
         return {**base, "action": "估值很便宜，积极分批", "tone": "bullish",
-                "buy_zone": buy_zone, "take_profit": None,
+                "buy_zone": _zone(recent_low, close), "take_profit": None,
                 "stop_loss": _round(close * 0.85) if close else None,
                 "reason": (f"{tag}，处于近五年低位区（安全边际较好）。价值派分批买、越跌越买；"
-                           f"估值修复到贵区(>70%分位)再考虑减；止损放宽到约 −15%（防基本面恶化）。")}
+                           f"估值修复到贵区(>70%分位)再考虑减；止损放宽到约 −15%。" + suffix)}
     if low <= 30:
         return {**base, "action": "偏便宜，可小批建仓", "tone": "bullish",
                 "buy_zone": _zone(recent_low, close), "take_profit": None,
                 "stop_loss": _round(close * 0.85) if close else None,
-                "reason": f"{tag}，估值偏低。可小批建仓，留子弹等更低；分位回到 70%+ 时分批减。"}
+                "reason": f"{tag}，估值偏低。可小批建仓，留子弹等更低；分位回到 70%+ 时分批减。" + suffix}
     if low >= 70:
+        # 高分位 + 多法高估 → 更明确看空
+        word = "（多法亦显示高估）" if verdict == "高估" else ""
         return {**base, "action": "估值偏贵，不买 / 可减", "tone": "bearish",
                 "buy_zone": None, "take_profit": None, "stop_loss": None,
-                "reason": f"{tag}，处于近五年高位区，缺乏安全边际；价值派此时不追，持仓者考虑分批兑现。"}
+                "reason": f"{tag}，处于近五年高位区{word}，缺乏安全边际；价值派不追，持仓者考虑分批兑现。" + suffix}
+    # 中间分位：若多法明确低估，则上调为可小批
+    if verdict == "低估":
+        return {**base, "action": "分位中性但多法低估，可小批", "tone": "bullish",
+                "buy_zone": _zone(recent_low, close), "take_profit": None,
+                "stop_loss": _round(close * 0.85) if close else None,
+                "reason": f"{tag}（分位中性），但{vtext}有安全边际，价值派可小批参与。"}
     return {**base, "action": "估值中性，耐心等", "tone": "neutral",
             "buy_zone": None, "take_profit": None, "stop_loss": None,
-            "reason": f"{tag}，估值不算便宜也不算贵；价值派偏好等更明显的低估再出手。"}
+            "reason": f"{tag}，估值不算便宜也不算贵；价值派偏好等更明显的低估再出手。" + suffix}
 
 
 def _rebound_master(df: pd.DataFrame, lv: dict) -> dict:
@@ -252,7 +281,7 @@ def _annual_fin(funda: dict | None, col: str) -> float | None:
     return _latest_fin(funda, col)
 
 
-def _quality_master(df: pd.DataFrame, funda: dict | None, lv: dict) -> dict:
+def _quality_master(df: pd.DataFrame, funda: dict | None, lv: dict, val: dict | None = None) -> dict:
     """芒格 · 质量/护城河：好生意（高 ROE、高毛利、低负债）+ 价格是否合理。"""
     base = {"key": "quality", "name": "质量护城河（芒格）", "horizon": "中长线"}
     roe = _annual_fin(funda, "净资产收益率")  # ROE 用年报，避免季报累计值低估
@@ -287,16 +316,22 @@ def _quality_master(df: pd.DataFrame, funda: dict | None, lv: dict) -> dict:
         return {**base, "action": "生意质量一般，不碰", "tone": "bearish",
                 "buy_zone": None, "take_profit": None, "stop_loss": None,
                 "reason": f"{bits}：{('、'.join(weak)) or '质量不达标'}。芒格只买伟大的生意，宁可错过不将就。"}
-    if val_pct is not None and val_pct >= 70:
+    vtext = valuation.short_text(val)
+    verdict = (val or {}).get("verdict")
+    rich = (val_pct is not None and val_pct >= 70) or verdict == "高估"
+    if rich:
         return {**base, "action": "好生意但偏贵，等回调", "tone": "neutral",
                 "buy_zone": None, "take_profit": None, "stop_loss": None,
-                "reason": f"{bits}，确是好生意；但估值近五年 {val_pct:.0f}% 分位偏贵，合理价才出手，耐心等回调。"}
+                "reason": (f"{bits}，确是好生意；但当前估值偏贵（"
+                           + (f"近五年 {val_pct:.0f}% 分位" if val_pct is not None else "")
+                           + "），合理价才出手，耐心等回调。" + (" " + vtext if vtext else ""))}
     quality_word = "卓越" if strong else "稳健"
     return {**base, "action": "好生意+价格合理，可买/持有", "tone": "bullish",
             "buy_zone": buy_zone, "take_profit": None, "stop_loss": stop,
             "reason": (f"{bits}，{quality_word}的生意"
                        + (f"，估值近五年 {val_pct:.0f}% 分位不贵" if val_pct is not None else "")
-                       + f"。芒格式『好生意合理价』，回踩 MA20({ma20}) 分批、长期持有，基本面恶化才离场。")}
+                       + f"。芒格式『好生意合理价』，回踩 MA20({ma20}) 分批、长期持有，基本面恶化才离场。"
+                       + (" " + vtext if vtext else ""))}
 
 
 def _wood_master(df: pd.DataFrame, funda: dict | None, lv: dict) -> dict:
@@ -394,11 +429,13 @@ def build_plan(df: pd.DataFrame, trends: dict | None = None,
                funda: dict | None = None) -> dict:
     """汇总：关键价位 + 四位大师的买卖纪律 + 总体倾向。"""
     if df is None or df.empty:
-        return {"levels": {}, "masters": [], "stance": {}, "disclaimer": ""}
+        return {"levels": {}, "masters": [], "stance": {}, "valuation": {}, "disclaimer": ""}
     lv = _key_levels(df)
+    growth = _latest_fin(funda, "净利润同比增长率")
+    val = valuation.estimate(lv.get("close"), funda, growth)
     masters = [
-        _value_master(df, funda, lv),
-        _quality_master(df, funda, lv),
+        _value_master(df, funda, lv, val),
+        _quality_master(df, funda, lv, val),
         _growth_master(df, funda, lv),
         _wood_master(df, funda, lv),
         _trend_master(df, trends or {}, lv),
@@ -409,6 +446,7 @@ def build_plan(df: pd.DataFrame, trends: dict | None = None,
         "levels": lv,
         "masters": masters,
         "stance": _stance(masters),
+        "valuation": val,
         "disclaimer": ("规则化研究信号，非投资建议；数据为日线非实时，价位为参考区间。"
                        "便宜可能更便宜、趋势可能反转——务必带止损、控制仓位，先用模拟盘验证。"),
     }
@@ -422,6 +460,9 @@ def plan_text(plan: dict, pref: str = "balanced") -> str:
     lines = [f"关键价位：现价 {lv.get('close')}，近端支撑 {lv.get('support')}，"
              f"近端压力 {lv.get('resistance')}，MA20 {lv.get('ma20')}，MA60 {lv.get('ma60')}，"
              f"布林下轨 {lv.get('boll_lower')}，布林上轨 {lv.get('boll_upper')}。"]
+    vtext = valuation.short_text(plan.get("valuation"))
+    if vtext:
+        lines.append("估值锚：" + vtext)
     for m in plan["masters"]:
         bz = f"买入区{m['buy_zone']}" if m.get("buy_zone") else "无明确买区"
         tp = f"，止盈≈{m['take_profit']}" if m.get("take_profit") is not None else ""

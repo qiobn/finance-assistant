@@ -472,6 +472,8 @@ function renderPlan(d) {
     cell("MA20", lv.ma20) + cell("MA60", lv.ma60) +
     cell("布林下轨", lv.boll_lower) + cell("布林上轨", lv.boll_upper);
 
+  renderValuation(plan.valuation || {});
+
   const masters = plan.masters || [];
   const wrap = $("plan-masters");
   wrap.innerHTML = masters.map((m) => {
@@ -495,6 +497,37 @@ function renderPlan(d) {
     btn.onclick = () => runMasterAi(d.code, btn.dataset.key, btn);
   });
   $("plan-disclaimer").textContent = plan.disclaimer || "";
+}
+
+function renderValuation(v) {
+  const box = $("plan-valuation");
+  if (!box) return;
+  if (!v || !v.fair_mid) {
+    box.innerHTML = v && v.note
+      ? `<div class="pv-head"><span class="pv-title">合理估值锚</span><span class="pv-note">${v.note}</span></div>`
+      : "";
+    return;
+  }
+  const toneMap = { 低估: "bullish", 合理: "neutral", 高估: "bearish" };
+  const tone = toneMap[v.verdict] || "neutral";
+  const mosTxt = `${v.mos > 0 ? "+" : ""}${v.mos}%`;
+  // 区间条上现价的位置（0~100%），现价低于下沿/高于上沿做夹取
+  const span = v.fair_high - v.fair_low;
+  let pos = span > 0 ? ((v.price - v.fair_low) / span) * 100 : 50;
+  pos = Math.max(2, Math.min(98, pos));
+  const methods = (v.methods || []).map((m) =>
+    `<span class="pv-m" title="${m.note || ""}">${m.name}<b>${m.fair}</b></span>`).join("");
+  box.innerHTML =
+    `<div class="pv-head"><span class="pv-title">合理估值锚</span>` +
+    `<span class="pv-verdict ${tone}">${v.verdict} · 安全边际 ${mosTxt}</span>` +
+    `<span class="pv-note">${v.note || ""}</span></div>` +
+    `<div class="pv-bar">` +
+      `<span class="pv-lo">${v.fair_low}</span>` +
+      `<div class="pv-track"><div class="pv-mid" style="left:50%"></div>` +
+        `<div class="pv-price ${tone}" style="left:${pos}%" title="现价 ${v.price}">▲</div></div>` +
+      `<span class="pv-hi">${v.fair_high}</span></div>` +
+    `<div class="pv-sub">现价 <b>${v.price}</b> · 合理中枢 <b>${v.fair_mid}</b>（多法中位）</div>` +
+    `<div class="pv-methods">${methods}</div>`;
 }
 
 async function runMasterAi(code, key, btn) {
