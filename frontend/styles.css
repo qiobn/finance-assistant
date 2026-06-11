@@ -352,6 +352,14 @@ body {
 .spinner { width: 34px; height: 34px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* 按钮内联转圈 + 忙碌态 + 等待提示行 */
+.spin { display: inline-block; width: 11px; height: 11px; border: 2px solid currentColor;
+  border-top-color: transparent; border-radius: 50%; animation: spin .7s linear infinite;
+  vertical-align: -1px; margin-right: 6px; }
+.is-busy { cursor: progress; opacity: .9; }
+button:disabled { cursor: not-allowed; }
+.loading-line { display: inline-flex; align-items: center; color: var(--text-dim); font-size: 13px; }
+
 /* 操作建议（投资大师 Skills） */
 .plan-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .plan-sub { font-size: 12px; color: var(--text-faint); font-weight: 400; }
@@ -364,6 +372,32 @@ body {
 .pl-cell { display: flex; flex-direction: column; gap: 2px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; min-width: 76px; }
 .pl-cell i { font-style: normal; font-size: 11px; color: var(--text-faint); }
 .pl-cell b { font-size: 14px; color: var(--text); }
+
+/* 合理估值锚（内在价值/安全边际） */
+.plan-val { margin: 12px 0; padding: 12px 14px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 10px; }
+.plan-val:empty { display: none; }
+.pv-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+.pv-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.pv-verdict { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 12px; }
+.pv-verdict.bullish { color: var(--bear); background: rgba(248,81,73,.12); }
+.pv-verdict.bearish { color: var(--bull); background: rgba(46,160,67,.12); }
+.pv-verdict.neutral { color: var(--text-dim); background: var(--bg-panel); }
+.pv-note { font-size: 11px; color: var(--text-faint); }
+.pv-bar { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
+.pv-lo, .pv-hi { font-size: 12px; color: var(--text-dim); min-width: 48px; }
+.pv-hi { text-align: right; }
+.pv-track { position: relative; flex: 1; height: 6px; border-radius: 3px;
+  background: linear-gradient(90deg, rgba(46,160,67,.5), rgba(210,153,34,.45), rgba(248,81,73,.5)); }
+.pv-mid { position: absolute; top: -3px; width: 2px; height: 12px; background: var(--text-faint); transform: translateX(-50%); }
+.pv-price { position: absolute; top: -16px; transform: translateX(-50%); font-size: 12px; line-height: 1; }
+.pv-price.bullish { color: var(--bear); }
+.pv-price.bearish { color: var(--bull); }
+.pv-price.neutral { color: var(--text); }
+.pv-sub { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+.pv-sub b { color: var(--text); }
+.pv-methods { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.pv-m { font-size: 11px; color: var(--text-faint); background: var(--bg-panel); border: 1px solid var(--border); border-radius: 8px; padding: 3px 8px; }
+.pv-m b { color: var(--text-dim); margin-left: 5px; }
 .plan-masters { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
 .pm { background: var(--bg-panel); border: 1px solid var(--border); border-left-width: 3px; border-radius: var(--radius); padding: 12px 14px; }
 .pm.bullish { border-left-color: var(--bear); }
@@ -384,6 +418,18 @@ body {
 .pm-lv.buy { color: var(--bear); }
 .pm-lv.sl { color: var(--bull); }
 .pm-reason { font-size: 12px; color: var(--text-dim); line-height: 1.6; }
+
+/* 评分 + 置信度（A：多因子评分制） */
+.ps-meta { font-size: 12px; color: var(--text-dim); margin-left: 10px; }
+.ps-meta b { color: var(--text); font-size: 14px; }
+.pm-meta { display: flex; align-items: center; gap: 8px; margin: 7px 0 2px; }
+.pm-score { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 9px; background: var(--bg-elev); color: var(--text-dim); }
+.pm-score.bullish { color: var(--bear); background: rgba(248,81,73,.12); }
+.pm-score.bearish { color: var(--bull); background: rgba(46,160,67,.12); }
+.pm-score.warning { color: var(--warn); background: rgba(210,153,34,.12); }
+.pm-conf { flex: 1; max-width: 140px; height: 5px; background: var(--bg-elev); border-radius: 3px; overflow: hidden; }
+.pm-conf i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.pm-conf-t { font-size: 11px; color: var(--text-faint); }
 .pm-ai { margin-top: 10px; border-top: 1px dashed var(--border); padding-top: 9px; }
 .pm-ai-btn { background: var(--bg-elev); color: var(--accent); border: 1px solid var(--border); border-radius: 8px; padding: 5px 11px; font-size: 12px; cursor: pointer; }
 .pm-ai-btn:hover:not(:disabled) { border-color: var(--accent); }

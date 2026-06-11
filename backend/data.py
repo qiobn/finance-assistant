@@ -344,6 +344,8 @@ def get_fundamentals(code: str) -> dict:
                     pct = float((vals <= cur).sum()) / len(vals) * 100
                     out["valuation"][key + "_pct"] = round(pct, 1)
                     out["valuation"][key + "_n"] = len(vals)
+                    # 历史中枢（中位数）：估值回归法的锚
+                    out["valuation"][key + "_median"] = round(float(vals.median()), 2)
         except Exception:
             out["valuation"][key] = None
 
