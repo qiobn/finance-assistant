@@ -911,14 +911,32 @@ function addBotMsg() {
   div.className = "chat-msg bot";
   const steps = document.createElement("div");
   steps.className = "chat-steps";
+  // 思考过程（思考模型才有；折叠展示）
+  const think = document.createElement("details");
+  think.className = "chat-think";
+  think.hidden = true;
+  const thinkSum = document.createElement("summary");
+  thinkSum.textContent = "💭 思考过程";
+  const thinkBody = document.createElement("div");
+  thinkBody.className = "chat-think-body";
+  think.appendChild(thinkSum);
+  think.appendChild(thinkBody);
   const ans = document.createElement("div");
   ans.className = "chat-answer";
   ans.innerHTML = '<span class="loading-line"><span class="spin"></span>思考中…</span>';
-  div.appendChild(steps);
-  div.appendChild(ans);
+  // 底部操作条（复制按钮，答案完成后显示）
+  const foot = document.createElement("div");
+  foot.className = "chat-foot";
+  foot.hidden = true;
+  const copy = document.createElement("button");
+  copy.className = "chat-copy";
+  copy.type = "button";
+  copy.textContent = "📋 复制";
+  foot.appendChild(copy);
+  div.append(steps, think, ans, foot);
   $("chat-log").appendChild(div);
   div.scrollIntoView({ behavior: "smooth", block: "end" });
-  return { steps, ans, root: div };
+  return { steps, think, thinkBody, ans, foot, copy, root: div };
 }
 function addStep(stepsEl, label, args) {
   const chip = document.createElement("span");
@@ -937,7 +955,8 @@ async function sendChat() {
   if (!q) return;
   input.value = "";
   addUserMsg(q);
-  const { steps, ans } = addBotMsg();
+  const { steps, think, thinkBody, ans, foot, copy } = addBotMsg();
+  let answer = "", reasoning = "", started = false;
   try {
     const res = await fetch("/api/agent/chat/stream", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -946,7 +965,7 @@ async function sendChat() {
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
-    let buf = "", answered = false;
+    let buf = "";
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -959,22 +978,36 @@ async function sendChat() {
         let evt;
         try { evt = JSON.parse(line); } catch { continue; }
         if (evt.type === "tool") {
-          if (!answered) ans.innerHTML = '<span class="loading-line"><span class="spin"></span>正在分析…</span>';
+          if (!started) ans.innerHTML = '<span class="loading-line"><span class="spin"></span>正在分析…</span>';
           addStep(steps, evt.label || evt.name, evt.args);
-        } else if (evt.type === "answer") {
-          ans.textContent = evt.text || "（无内容）";
-          answered = true;
+        } else if (evt.type === "reasoning") {
+          reasoning += evt.text || "";
+          think.hidden = false;
+          thinkBody.textContent = reasoning;
+        } else if (evt.type === "delta") {
+          if (!started) { ans.textContent = ""; started = true; }
+          answer += evt.text || "";
+          ans.textContent = answer;
+        } else if (evt.type === "done") {
+          if (answer.trim()) { foot.hidden = false; }
         } else if (evt.type === "error") {
           ans.textContent = "出错：" + (evt.text || "未知错误");
-          answered = true;
+          started = true;
         }
         ans.scrollIntoView({ behavior: "smooth", block: "end" });
       }
     }
-    if (!answered) ans.textContent = "（未收到回答，请重试）";
+    if (!started) ans.textContent = "（未收到回答，请重试）";
   } catch (e) {
     ans.textContent = "请求失败：" + e.message;
   }
+  copy.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(answer);
+      copy.textContent = "✅ 已复制";
+      setTimeout(() => { copy.textContent = "📋 复制"; }, 1500);
+    } catch { copy.textContent = "复制失败"; }
+  };
 }
 async function resetChat() {
   try { await api("/api/agent/reset", {

@@ -16,7 +16,8 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import agent, agent_tools, backtest, data, db, intel, llm, storage, strategies
+from . import agent_tools, backtest, data, db, intel, llm, storage, strategies
+from .agent import run_stream as agent_run_stream
 from .analysis import build_analysis, trend_overview
 from .indicators import compute_all
 
@@ -468,9 +469,13 @@ def chat(payload: dict = Body(...)) -> dict:
     }
 
 
-# ---- 投研智能体（多轮 + 工具调用）----
-_AGENT_SESSIONS: dict[str, list[dict]] = {}  # session_id -> 干净历史（user/assistant 终稿）
-_AGENT_MAX_TURNS = 12  # 仅保留最近 N 轮，控制上下文长度
+# ---- 投研智能体（LangGraph：多轮 + 工具调用）----
+# 多轮状态由 LangGraph checkpointer 按 thread_id 维护；reset 通过递增 epoch 切换到全新 thread。
+_AGENT_EPOCH: dict[str, int] = {}
+
+
+def _agent_thread(sid: str) -> str:
+    return f"{sid}#{_AGENT_EPOCH.get(sid, 0)}"
 
 
 @app.get("/api/agent/tools")
@@ -482,34 +487,21 @@ def agent_tools_list() -> dict:
 @app.post("/api/agent/reset")
 def agent_reset(payload: dict = Body(default={})) -> dict:
     sid = str((payload or {}).get("session_id") or "default")
-    _AGENT_SESSIONS.pop(sid, None)
+    _AGENT_EPOCH[sid] = _AGENT_EPOCH.get(sid, 0) + 1
     return {"ok": True}
 
 
 @app.post("/api/agent/chat/stream")
-def agent_chat_stream(payload: dict = Body(...)):
+async def agent_chat_stream(payload: dict = Body(...)):
     question = (payload.get("question") or "").strip()
     if not question:
         raise HTTPException(status_code=400, detail="问题不能为空")
     sid = str(payload.get("session_id") or "default")
-    history = list(_AGENT_SESSIONS.get(sid, []))
-    messages = agent.build_initial(history, question)
+    thread = _agent_thread(sid)
 
-    def gen():
-        final_answer = None
-        for line in agent.run_stream(messages):
+    async def gen():
+        async for line in agent_run_stream(thread, question):
             yield line
-            try:
-                obj = json.loads(line)
-                if obj.get("type") == "answer":
-                    final_answer = obj.get("text")
-            except ValueError:
-                pass
-        # 持久化为干净历史（丢弃工具脚手架，避免跨轮 tool_call 一致性问题）
-        new_hist = history + [{"role": "user", "content": question}]
-        if final_answer:
-            new_hist.append({"role": "assistant", "content": final_answer})
-        _AGENT_SESSIONS[sid] = new_hist[-(_AGENT_MAX_TURNS * 2):]
 
     return StreamingResponse(gen(), media_type="application/x-ndjson")
 
