@@ -110,13 +110,21 @@ backend/
   intel.py        情报层：板块热度榜 + 财经快讯 + 个股新闻（规则打标，含重试）；
                   Phase 2 LLM 情绪打标 + 板块情绪榜 + 个股消息面综述（按 hash 缓存）
   llm.py          OpenAI 兼容 LLM 客户端（多档配置、流式输出、投资偏好）
-  storage.py      自选股 JSON 存储
+  agent_tools.py  智能体工具实现层（11 个工具：行情/分析/用户态，裁剪返回省 token）
+  agent/          投研智能体（LangGraph）：
+    model.py      ChatOpenAI 工厂（复用 llm 配置 + 每档代理，接第三方 API）
+    tools.py      工具分层封装为 LangChain tool（L1行情/L2分析/L3用户态）
+    prompt.py     系统提示（禁猜代码、严格区分"我的自选/持仓"与模型挑选）
+    memory.py     上下文工程：Token 预算 + 摘要（pre_model_hook，仅裁剪 LLM 输入）
+    graph.py      create_react_agent + AsyncSqliteSaver（按 thread_id 持久化多轮，重启不丢）
+    runner.py     astream_events → 前端 NDJSON 事件（工具步骤 + 最终答案 + 兜底）
 frontend/
   index.html / styles.css / app.js   交互式看板（ECharts；SWR 客户端缓存 + 骨架屏）
 data/                                （自动生成，已被 .gitignore 忽略）
   cache.db        K线/基本面 SQLite 缓存（可删除重建）
   watchlist.json  自选股
   llm_config.json LLM 配置（含 API key）
+  agent_checkpoints.db  智能体多轮对话持久化（LangGraph checkpointer）
 ```
 
 ## 架构与性能要点
