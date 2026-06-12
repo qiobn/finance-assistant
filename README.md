@@ -20,7 +20,7 @@
 - **自选总览**：把自选股列成「体检表」，一眼看涨跌与看多/看空/警示信号数量。
 - **选股扫描**：按规则（均线多头、MACD 金叉、RSI 超买超卖、放量、逼近布林下轨）筛股；范围支持**自选股 / 上证50 / 沪深300**；结果**流式输出**（边扫边出 + 进度）。
 - **策略回测**（本地、免费）：用历史日线复现纯技术策略（综合信号 / 趋势跟随 / MACD 金叉 / 超跌反弹），在 t 日收盘决策、t+1 日成交避免未来函数，含交易成本估计；给出**策略收益 / 买入持有基准 / 超额 / 年化 / 最大回撤 / 胜率 / 交易次数 / 持仓占比 / 夏普**，并绘制资金曲线与逐笔交易表。基本面类大师依赖当下快照、无法点到点回放，故不纳入回测。
-- **AI 问答**：用大白话提问，系统自动识别问题里的股票并带上真实指标交给你的 LLM 作答；可勾选**引入上下文**（大盘总览 / 自选股技术面 / 情报快讯）随本次提问一起发给模型。
+- **AI 投研助手（智能体）**：基于 **LangGraph** 的多轮对话智能体——模型自主调用真实数据工具（行情 / 技术面 / 基本面 / 大师计划 / 回测 / 大盘 / 板块 / 新闻 / 自选 / 持仓）来回答，比如「我的持仓里哪只该减仓」会自动取持仓再逐只评估。支持**工具步骤可视化**、**思考过程展示**（推理模型）、**答案逐字流式**、**一键复制**、**多轮记忆且重启不丢**（SQLite 持久化）、超长对话自动摘要。
 - **AI 深度点评**：接入 OpenAI 兼容大模型，对个股流式生成结构化点评；支持保存多套 API 配置并随时切换。可选**投资偏好（短线收益 / 长期持有 / 均衡）**，模型据此给出不同侧重的买卖计划。
 - **操作建议（投资大师 Skills）**：把七位大师的纪律规则化，给出**具体价位**——买入区间 / 止盈位 / 止损位 + 当前该做什么 + 依据。每位大师输出**多空分(0-100)** 与**置信度(%)**；委员会按**置信度加权**汇总出总体多空分、平均置信与**分歧度**（组合经理视角），分歧过大即便偏多也提示降低仓位。
 - **合理估值锚（内在价值 / 安全边际）**：用多种方法（历史 PE/PB 中枢、格雷厄姆数、林奇合理 PE、两阶段盈利贴现简化 DCF）估算**合理价区间**与中枢，给出现价相对中枢的**安全边际**与低估/合理/高估判定，并作为价值/质量大师的依据。属相对/简化估值的研究锚，对亏损股、强周期、银行地产会失真，需与价格/资金互相印证。
@@ -62,37 +62,76 @@
 ## 技术栈
 
 - 后端：Python + FastAPI + akshare + pandas/numpy
+- 智能体：LangGraph（ReAct 编排 + SQLite Checkpointer 持久化）+ langchain-openai / langchain-deepseek 接第三方 LLM
 - 前端：原生 HTML/CSS/JS + ECharts（无需 npm 构建，刷新即用）
-- 存储：SQLite（K线/基本面缓存，`data/cache.db`）+ 本地 JSON（自选股 / LLM 配置）
+- 存储：SQLite（K线/基本面缓存 `data/cache.db`；智能体会话 `data/agent_checkpoints.db`）+ 本地 JSON（自选股 / 持仓 / LLM 配置）
 
 ## 快速开始
 
-```bash
-# 方式一：一键脚本（默认端口 8777，可用 PORT=xxxx 覆盖）
-bash run.sh
+### 前置要求
 
-# 方式二：手动
+- **Python 3.10+**（开发使用 3.14，3.10–3.14 均可）
+- **Git**；操作系统 macOS / Linux / Windows（推荐 WSL，原生 PowerShell 亦可）
+- （可选）一个 **OpenAI 兼容的大模型 API Key**——仅 AI 功能（智能体问答 / 深度点评 / 情绪打标 / 大师解读）需要。推荐 [DeepSeek](https://platform.deepseek.com)：便宜、支持工具调用与思考过程。
+
+> 行情、技术指标、回测、自选、晨报等本地功能**无需任何 Key 即可使用**。
+
+### 1. 获取代码
+
+```bash
+git clone https://github.com/qiobn/finance-assistant.git
+cd finance-assistant
+```
+
+### 2. 安装并启动
+
+**方式 A：一键脚本（推荐）**——自动创建虚拟环境、安装依赖并启动：
+
+```bash
+bash run.sh                # 默认端口 8777
+PORT=8888 bash run.sh      # 自定义端口
+```
+
+**方式 B：手动**
+
+```bash
 python3 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate              # Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 uvicorn backend.app:app --reload --port 8777
 ```
 
-启动后浏览器打开 <http://127.0.0.1:8777>（端口 8000 常被其他服务占用，故默认用 8777）。
+### 3. 打开应用
 
-- 左侧搜索框输入代码或名称（如 `600519` / `茅台`）即可切换股票，自选股可增删并本地保存。
+浏览器访问 **<http://127.0.0.1:8777>**（默认 8777，避开常被占用的 8000）。
+
+- 左侧搜索框输入代码或名称（如 `600519` / `茅台` / `510300`）即可切换标的，自选股可增删并本地保存。
 - 数据源：优先东方财富，失败自动切换新浪，仍失败则回退离线演示数据（界面会标注「演示」）。
 
-## 接入你自己的 LLM
+### 4. 配置大模型（启用 AI 功能，可选）
 
-本项目用 **OpenAI 兼容协议** 接大模型，支持 OpenAI / DeepSeek / Kimi / 通义 / OpenRouter / 本地 Ollama 等。
+本项目用 **OpenAI 兼容协议** 接大模型，支持 OpenAI / DeepSeek / Kimi / 通义 / OpenRouter / 本地 Ollama 等。两种方式任选其一：
 
-两种配置方式（任选其一）：
+1. **网页配置（推荐）**：点左下角「⚙ AI」，填写 名称 / Base URL / API Key / Model 后保存即用；可保存多套接入随时切换。配置存于 `data/llm_config.json`，**仅本地、不上传、已被 .gitignore 忽略**。
+2. **环境变量 / `.env`**：`cp .env.example .env`，填写 `LLM_BASE_URL / LLM_API_KEY / LLM_MODEL`（需翻墙的服务可填 `LLM_PROXY`）。
 
-1. **网页配置（推荐）**：点左下角「⚙ AI」，可保存多套接入（名称 / Base URL / API Key / Model），选中哪套就用哪套。配置存于 `data/llm_config.json`，**仅本地、不上传、已被 .gitignore 忽略**。
-2. **环境变量 / `.env`**：复制 `.env.example` 为 `.env` 并填写 `LLM_BASE_URL / LLM_API_KEY / LLM_MODEL`。
+常见服务（`Base URL` / `Model`）：
 
-配置后，在「AI 深度点评」区域点击「用我的 LLM 分析」，模型会基于真实指标流式生成结构化中文点评。
+| 服务 | Base URL | 示例 Model |
+|---|---|---|
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat`（思考过程用 `deepseek-reasoner`） |
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` |
+| Kimi（月之暗面） | `https://api.moonshot.cn/v1` | `moonshot-v1-8k` |
+| 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
+| 本地 Ollama | `http://localhost:11434/v1` | `qwen2.5`（key 随便填） |
+
+> 想看「💭 思考过程」：选支持推理的模型（如 `deepseek-reasoner`）；非推理模型会自动隐藏思考面板。
+
+### 5. 验证（可选）
+
+```bash
+curl http://127.0.0.1:8777/api/health      # 返回 ok + akshare 是否可用
+```
 
 ## 项目结构
 
@@ -159,7 +198,10 @@ data/                                （自动生成，已被 .gitignore 忽略�
 | GET | `/api/scan/rules` | 可用筛选规则 |
 | POST | `/api/scan` | 选股扫描（一次性返回） |
 | GET | `/api/scan/stream` | 选股扫描（SSE 流式，边扫边出） |
-| POST | `/api/chat` | 自然语言问答（自动识别股票） |
+| POST | `/api/chat` | 自然语言问答（单轮，自动识别股票） |
+| GET | `/api/agent/tools` | 智能体可用工具列表 |
+| POST | `/api/agent/chat/stream` | 智能体多轮对话（NDJSON 流式：工具步骤 / 思考 / 答案增量） |
+| POST | `/api/agent/reset` | 重置某会话（新对话） |
 | GET | `/api/llm/config` | 当前激活配置摘要（隐藏 key） |
 | GET | `/api/llm/profiles` | 列出所有 LLM 接入档 + 当前激活 |
 | POST | `/api/llm/profiles` | 新增/编辑接入档（含 id 则编辑） |
@@ -167,6 +209,17 @@ data/                                （自动生成，已被 .gitignore 忽略�
 | POST | `/api/llm/active` | 切换当前使用的接入档 |
 | POST | `/api/stock/{code}/ai?pref=` | 用你的 LLM 生成深度点评（pref: short/long/balanced） |
 | POST | `/api/stock/{code}/ai/stream?pref=` | 流式生成点评（含大师买卖计划） |
+
+## 常见问题（FAQ）
+
+- **端口被占用 / 想换端口**：`PORT=8888 bash run.sh`；或先释放：`lsof -ti tcp:8777 | xargs kill -9`（Windows 用任务管理器）。
+- **取数很慢或失败**：akshare 是公共数据源，偶发抖动；项目已内置重试与离线演示兜底（界面标「演示」）。稍后重试，或删除 `data/cache.db` 重新拉取。
+- **AI 报「尚未配置 LLM」**：去左下角「⚙ AI」填写并保存一套配置（见上文第 4 步）。
+- **代理 / 翻墙报 403 或连不上**：默认**直连并忽略系统代理**（避免被错误代理拦截）；如所用服务需翻墙（如 OpenAI），在该档配置或 `.env` 的 `LLM_PROXY` 单独填代理。国内 DeepSeek/Kimi/通义留空即可。
+- **看不到前端改动**：浏览器缓存所致，硬刷新（macOS `Cmd+Shift+R`）或 DevTools 勾选「Disable cache」。
+- **想立刻刷新当天行情**：重启服务，或删除 `data/cache.db` 后重开（日线当天首次取数后会冻结）。
+- **智能体多轮「串了」/ 想从头开始**：在「AI 投研助手」页点「🔄 新对话」。
+- **不要同时跑两个实例指向同一 `data/`**：`data/agent_checkpoints.db` 为单写，多个进程会互相锁等待。
 
 ## 下一步可扩展
 
