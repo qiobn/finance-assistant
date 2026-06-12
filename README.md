@@ -151,7 +151,7 @@ backend/
   llm.py          OpenAI 兼容 LLM 客户端（多档配置、流式输出、投资偏好）
   agent_tools.py  智能体工具实现层（11 个工具：行情/分析/用户态，裁剪返回省 token）
   agent/          投研智能体（LangGraph）：
-    model.py      ChatOpenAI 工厂（复用 llm 配置 + 每档代理，接第三方 API）
+    model.py      LLM 工厂（复用 llm 配置 + 每档代理；DeepSeek 走 ChatDeepSeek 以保留思考过程，其余走 ChatOpenAI）
     tools.py      工具分层封装为 LangChain tool（L1行情/L2分析/L3用户态）
     prompt.py     系统提示（禁猜代码、严格区分"我的自选/持仓"与模型挑选）
     memory.py     上下文工程：Token 预算 + 摘要（pre_model_hook，仅裁剪 LLM 输入）
@@ -181,6 +181,7 @@ data/                                （自动生成，已被 .gitignore 忽略�
 | GET | `/api/search?q=` | 按代码/名称搜索 |
 | GET | `/api/stock/{code}?days=160` | K线 + 指标 + 分析 |
 | GET | `/api/stock/{code}/fundamentals` | 估值 + 财务摘要 + 资金流 |
+| GET | `/api/masters` | 投资大师 Skills 列表（大师/风格元数据） |
 | GET | `/api/stock/{code}/plan` | 投资大师操作建议（买入区/止盈/止损/总体倾向） |
 | GET | `/api/backtest/strategies` | 可用回测策略列表 |
 | GET | `/api/stock/{code}/backtest?strategy=composite&days=250` | 技术策略历史回测（收益/胜率/回撤/资金曲线） |
@@ -209,6 +210,7 @@ data/                                （自动生成，已被 .gitignore 忽略�
 | POST | `/api/llm/active` | 切换当前使用的接入档 |
 | POST | `/api/stock/{code}/ai?pref=` | 用你的 LLM 生成深度点评（pref: short/long/balanced） |
 | POST | `/api/stock/{code}/ai/stream?pref=` | 流式生成点评（含大师买卖计划） |
+| POST | `/api/stock/{code}/master/{key}/ai/stream` | 单个大师「🧠 AI 解读」（按其口吻流式深度分析） |
 
 ## 常见问题（FAQ）
 
