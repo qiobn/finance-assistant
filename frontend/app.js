@@ -893,61 +893,101 @@ function runScan() {
 }
 $("scan-run").onclick = runScan;
 
-/* ---------------- Chat ---------------- */
-function addChatMsg(role, text, used) {
-  const log = $("chat-log");
-  const div = document.createElement("div");
-  div.className = "chat-msg " + role;
-  div.textContent = text;
-  if (used && used.length) {
-    const u = document.createElement("span");
-    u.className = "used";
-    u.textContent = "参考数据：" + used.map((x) => `${x.name}(${x.code})`).join("、");
-    div.appendChild(u);
-  }
-  log.appendChild(div);
-  div.scrollIntoView({ behavior: "smooth", block: "end" });
-  return div;
+/* ---------------- AI 投研助手（智能体）---------------- */
+function agentSid() {
+  let sid = localStorage.getItem("agent_sid");
+  if (!sid) { sid = "s" + Date.now() + Math.random().toString(36).slice(2, 8); localStorage.setItem("agent_sid", sid); }
+  return sid;
 }
-const chatSources = new Set();
+function addUserMsg(text) {
+  const div = document.createElement("div");
+  div.className = "chat-msg user";
+  div.textContent = text;
+  $("chat-log").appendChild(div);
+  div.scrollIntoView({ behavior: "smooth", block: "end" });
+}
+function addBotMsg() {
+  const div = document.createElement("div");
+  div.className = "chat-msg bot";
+  const steps = document.createElement("div");
+  steps.className = "chat-steps";
+  const ans = document.createElement("div");
+  ans.className = "chat-answer";
+  ans.innerHTML = '<span class="loading-line"><span class="spin"></span>思考中…</span>';
+  div.appendChild(steps);
+  div.appendChild(ans);
+  $("chat-log").appendChild(div);
+  div.scrollIntoView({ behavior: "smooth", block: "end" });
+  return { steps, ans, root: div };
+}
+function addStep(stepsEl, label, args) {
+  const chip = document.createElement("span");
+  chip.className = "chat-step";
+  let detail = "";
+  if (args && (args.code || args.query || args.strategy)) {
+    detail = "：" + (args.code || args.query || args.strategy);
+  }
+  chip.textContent = "🛠 " + label + detail;
+  stepsEl.appendChild(chip);
+  chip.scrollIntoView({ behavior: "smooth", block: "end" });
+}
 async function sendChat() {
   const input = $("chat-text");
   const q = input.value.trim();
   if (!q) return;
   input.value = "";
-  const sources = [...chatSources];
-  addChatMsg("user", q);
-  const thinking = addChatMsg("bot", "思考中…");
+  addUserMsg(q);
+  const { steps, ans } = addBotMsg();
   try {
-    const d = await api("/api/chat", {
+    const res = await fetch("/api/agent/chat/stream", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question: q, sources }),
+      body: JSON.stringify({ question: q, session_id: agentSid() }),
     });
-    thinking.textContent = d.text;
-    const refs = [];
-    if (d.used && d.used.length) refs.push(...d.used.map((x) => `${x.name}(${x.code})`));
-    if (d.sources_used && d.sources_used.length) refs.push(...d.sources_used);
-    if (refs.length) {
-      const u = document.createElement("span");
-      u.className = "used";
-      u.textContent = "参考数据：" + refs.join("、");
-      thinking.appendChild(u);
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "", answered = false;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        let evt;
+        try { evt = JSON.parse(line); } catch { continue; }
+        if (evt.type === "tool") {
+          if (!answered) ans.innerHTML = '<span class="loading-line"><span class="spin"></span>正在分析…</span>';
+          addStep(steps, evt.label || evt.name, evt.args);
+        } else if (evt.type === "answer") {
+          ans.textContent = evt.text || "（无内容）";
+          answered = true;
+        } else if (evt.type === "error") {
+          ans.textContent = "出错：" + (evt.text || "未知错误");
+          answered = true;
+        }
+        ans.scrollIntoView({ behavior: "smooth", block: "end" });
+      }
     }
+    if (!answered) ans.textContent = "（未收到回答，请重试）";
   } catch (e) {
-    thinking.textContent = "回答失败：" + e.message;
+    ans.textContent = "请求失败：" + e.message;
   }
+}
+async function resetChat() {
+  try { await api("/api/agent/reset", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: agentSid() }),
+  }); } catch (e) { /* ignore */ }
+  $("chat-log").innerHTML = "";
 }
 $("chat-send").onclick = (e) => withBusy(e.currentTarget, sendChat, "发送中…");
 $("chat-text").addEventListener("keydown", (e) => {
   if (e.key === "Enter") withBusy($("chat-send"), sendChat, "发送中…");
 });
-document.querySelectorAll(".ctx-chip").forEach((chip) => {
-  chip.onclick = () => {
-    const src = chip.dataset.src;
-    if (chatSources.has(src)) { chatSources.delete(src); chip.classList.remove("on"); }
-    else { chatSources.add(src); chip.classList.add("on"); }
-  };
-});
+$("chat-reset").onclick = (e) => withBusy(e.currentTarget, resetChat, "清空中…");
 
 /* ---------------- Backtest ---------------- */
 let btChart = null;

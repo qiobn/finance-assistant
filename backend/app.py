@@ -16,7 +16,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import backtest, data, db, intel, llm, storage, strategies
+from . import agent, agent_tools, backtest, data, db, intel, llm, storage, strategies
 from .analysis import build_analysis, trend_overview
 from .indicators import compute_all
 
@@ -466,6 +466,52 @@ def chat(payload: dict = Body(...)) -> dict:
         "used": [{"code": c["code"], "name": c["name"]} for c in contexts],
         "sources_used": [b["label"] for b in extras],
     }
+
+
+# ---- 投研智能体（多轮 + 工具调用）----
+_AGENT_SESSIONS: dict[str, list[dict]] = {}  # session_id -> 干净历史（user/assistant 终稿）
+_AGENT_MAX_TURNS = 12  # 仅保留最近 N 轮，控制上下文长度
+
+
+@app.get("/api/agent/tools")
+def agent_tools_list() -> dict:
+    return {"tools": [{"name": n, "label": agent_tools.TOOL_LABELS.get(n, n)}
+                      for n in agent_tools.TOOL_FUNCS]}
+
+
+@app.post("/api/agent/reset")
+def agent_reset(payload: dict = Body(default={})) -> dict:
+    sid = str((payload or {}).get("session_id") or "default")
+    _AGENT_SESSIONS.pop(sid, None)
+    return {"ok": True}
+
+
+@app.post("/api/agent/chat/stream")
+def agent_chat_stream(payload: dict = Body(...)):
+    question = (payload.get("question") or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="问题不能为空")
+    sid = str(payload.get("session_id") or "default")
+    history = list(_AGENT_SESSIONS.get(sid, []))
+    messages = agent.build_initial(history, question)
+
+    def gen():
+        final_answer = None
+        for line in agent.run_stream(messages):
+            yield line
+            try:
+                obj = json.loads(line)
+                if obj.get("type") == "answer":
+                    final_answer = obj.get("text")
+            except ValueError:
+                pass
+        # 持久化为干净历史（丢弃工具脚手架，避免跨轮 tool_call 一致性问题）
+        new_hist = history + [{"role": "user", "content": question}]
+        if final_answer:
+            new_hist.append({"role": "assistant", "content": final_answer})
+        _AGENT_SESSIONS[sid] = new_hist[-(_AGENT_MAX_TURNS * 2):]
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
 # ---- 每日复盘 / 晨报 ----
