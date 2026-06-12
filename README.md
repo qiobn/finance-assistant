@@ -117,7 +117,7 @@ backend/
     prompt.py     系统提示（禁猜代码、严格区分"我的自选/持仓"与模型挑选）
     memory.py     上下文工程：Token 预算 + 摘要（pre_model_hook，仅裁剪 LLM 输入）
     graph.py      create_react_agent + AsyncSqliteSaver（按 thread_id 持久化多轮，重启不丢）
-    runner.py     astream_events → 前端 NDJSON 事件（工具步骤 + 最终答案 + 兜底）
+    runner.py     astream_events → 前端 NDJSON 事件（工具步骤 + 推理过程 + 答案token级流式 + 兜底）
 frontend/
   index.html / styles.css / app.js   交互式看板（ECharts；SWR 客户端缓存 + 骨架屏）
 data/                                （自动生成，已被 .gitignore 忽略）
