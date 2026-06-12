@@ -263,20 +263,17 @@
         <div id="scan-results" class="scan-results"></div>
       </section>
 
-      <!-- ===== AI 问答 ===== -->
+      <!-- ===== AI 投研助手（智能体）===== -->
       <section id="view-chat" class="view" hidden>
         <div class="view-head">
-          <h2>AI 问答</h2>
-          <span class="chat-hint">基于真实指标作答，可问「比较茅台和宁德时代」「000001 现在技术面如何」</span>
+          <h2>AI 投研助手</h2>
+          <span class="chat-hint">多轮对话智能体，会自动调取真实数据作答。可问「我的持仓有哪些该减仓」「回测一下 600519 的趋势策略」</span>
+        </div>
+        <div class="chat-bar">
+          <span class="chat-cap">🛠 可调用：技术面 · 基本面 · 大师计划 · 回测 · 大盘 · 板块 · 新闻 · 自选 · 持仓</span>
+          <button id="chat-reset" class="ghost-btn" type="button">🔄 新对话</button>
         </div>
         <div id="chat-log" class="chat-log"></div>
-        <div class="chat-ctx">
-          <span class="chat-ctx-label">引入上下文：</span>
-          <button class="ctx-chip" data-src="market" type="button">📈 大盘总览</button>
-          <button class="ctx-chip" data-src="watchlist" type="button">📌 自选股技术面</button>
-          <button class="ctx-chip" data-src="intel" type="button">🧠 情报快讯</button>
-          <span class="chat-ctx-hint">勾选后随本次提问一并发给 AI（会增加少量 token）</span>
-        </div>
         <div class="chat-input">
           <input id="chat-text" type="text" placeholder="输入你的问题，回车发送…" autocomplete="off" />
           <button id="chat-send" class="ai-btn">发送</button>

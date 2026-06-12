@@ -189,6 +189,41 @@ def chat(messages: list[dict], temperature: float = 0.4, max_tokens: int = 1500)
         raise LLMError(f"无法解析 LLM 响应：{resp.text[:200]}") from exc
 
 
+def chat_raw(messages: list[dict], tools: list[dict] | None = None,
+             temperature: float = 0.3, max_tokens: int = 1500) -> dict:
+    """原始（非流式）调用，返回完整 assistant message（含可能的 tool_calls）。
+
+    用于智能体的工具调用循环。返回形如：
+        {"role": "assistant", "content": "...", "tool_calls": [...]}
+    """
+    cfg = get_config()
+    if not cfg["api_key"]:
+        raise LLMError("尚未配置 LLM：请在网页左下「⚙ AI」填写 base_url / api_key / model。")
+    url = cfg["base_url"].rstrip("/") + "/chat/completions"
+    sess, proxies = _new_session(cfg)
+    body = {
+        "model": cfg["model"], "messages": messages,
+        "temperature": temperature, "max_tokens": max_tokens, "stream": False,
+    }
+    if tools:
+        body["tools"] = tools
+        body["tool_choice"] = "auto"
+    try:
+        resp = sess.post(
+            url,
+            headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"},
+            json=body, timeout=120, proxies=proxies,
+        )
+    except requests.RequestException as exc:
+        raise LLMError(f"调用 LLM 失败（网络/地址/代理错误）：{exc}") from exc
+    if resp.status_code != 200:
+        raise LLMError(f"LLM 返回错误 {resp.status_code}：{resp.text[:200]}")
+    try:
+        return resp.json()["choices"][0]["message"]
+    except (KeyError, IndexError, ValueError) as exc:
+        raise LLMError(f"无法解析 LLM 响应：{resp.text[:200]}") from exc
+
+
 def chat_stream(messages: list[dict], temperature: float = 0.4, max_tokens: int = 1500):
     """流式生成：逐块 yield 文本（OpenAI 兼容 SSE）。"""
     cfg = get_config()
